@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "browserd"
+version = "2.0.0"
+description = "Browser automation daemon with parallel Chrome instances, persistent sessions, and Unix socket CLI"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "browser-use @ git+https://github.com/browser-use/browser-use.git",
+    "cdp-use>=1.4.5",
+    "aiohttp>=3.9",
+    "pydantic>=2.0",
+]
+
+[project.scripts]
+browserd = "browserd.daemon:main"
+browser-cli = "browserd.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["browserd*"]
