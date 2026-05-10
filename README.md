@@ -10,7 +10,7 @@ BrowserD runs as a background service. AI agents (or any client) send tasks over
 - **Persistent sessions** — keep a browser alive across multiple tasks. Agents can start a session, run several follow-up tasks, and close it when done.
 - **Crash recovery** — if Chrome dies, the session remembers which tabs were open and restores them automatically.
 - **Task queuing** — submitting 10 tasks when only 4 ports are available? No problem — the extras queue up and run when a port frees.
-- **Simple CLI** — designed for both humans and agents. Every command has JSON output mode so agent toolchains can parse responses.
+- **Simple CLI** — designed for both humans and agents. Every command has JSON output mode so agent toolchains can parse responses.\n- **Human-in-the-loop** — pause agents mid-execution, inject corrected prompts, auto-pause on login walls. Browser stays open while you intervene manually.
 
 ## Quick Start
 
@@ -35,7 +35,7 @@ BrowserD reads environment variables from `~/.browserd/.env` at startup.
 | `LLM_PROVIDER` | `deepseek` | LLM provider ID (see table below) |
 | `LLM_MODEL` | provider default | Model name override (optional) |
 | `DEEPSEEK_API_KEY` | — | API key for your chosen provider |
-| `MAX_PARALLEL_TASKS` | `4` | How many Chrome instances can run simultaneously (1–16) |
+| `MAX_PARALLEL_TASKS` | `2` | How many Chrome instances can run simultaneously (1–16) |
 
 ### LLM Providers
 
@@ -104,10 +104,22 @@ browser-cli list --status running    # Filter by status
 browser-cli status <task-id>         # Current state + step count + URL
 browser-cli result <task-id>         # Final output (parsed result)
 browser-cli logs <task-id>           # Step-by-step logs (--tail N)
+browser-cli steps <task-id>          # Agent thinking + actions per step (--tail N)
 browser-cli wait <task-id>           # Block until done (--timeout N)
-browser-cli resume <task-id>         # Retry a blocked login/auth task
 browser-cli cancel <task-id>         # Kill a running task, free its port
 ```
+
+### Human-in-the-loop (pause / correct / resume)
+
+```bash
+browser-cli pause <task-id>          # Freeze agent mid-step — browser stays open
+browser-cli resume-agent <task-id>   # Unfreeze and continue from current state
+browser-cli inject <task-id> "prompt" # Replace task mid-execution — auto-resumes
+```
+
+**Auto-pause on login:** Agent detects login/auth URLs during execution and pauses automatically after 2 hits. Log in manually in the same browser window, then `browser-cli resume-agent <id>`.
+
+**Correction flow:** Watch `browser-cli steps <id>`, spot a problem → `pause` → `inject "go to X instead"` → agent continues corrected, same session, no restart.
 
 ### Inspecting state
 

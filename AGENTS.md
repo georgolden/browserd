@@ -21,10 +21,10 @@ CLI → argparse wrapper (browser-cli)
 | `browserd/providers.py` | Provider registry: maps provider IDs to browser-use chat classes, env vars, models |
 | `browserd/db.py` | SQLite WAL: tasks, sessions, session_tabs tables |
 | `browserd/portpool.py` | Chrome process spawn/kill, port lifecycle with asyncio.Lock |
-| `browserd/tasks.py` | TaskManager: queue, dequeue, _run_task, session handling, state reconciliation |
+| `browserd/tasks.py` | TaskManager: queue, dequeue, _run_task, session handling, pause/inject control |
 | `browserd/daemon.py` | DaemonServer: Unix socket, _dispatch, _wait + main() entry point |
-| `browserd/client.py` | BrowserClient: send(), run(), wait(), resume(), state_*() |
-| `browserd/cli.py` | argparse CLI: browser-cli run|state|resume|cancel|... |
+| `browserd/client.py` | BrowserClient: send(), run(), wait(), resume(), pause(), inject(), state_*() |
+| `browserd/cli.py` | argparse CLI: browser-cli run|pause|inject|resume-agent|state|cancel|... |
 
 ### Data flow
 
@@ -85,6 +85,10 @@ Port is NOT released when:
 | UC-06 | 5 tasks on 4-port pool | 5th queues, runs when port freed |
 | UC-07 | `resume <blocked_id>` | Re-runs task, activates existing tab |
 | UC-08 | `cancel <id>` | Task cancelled, port freed |
+| UC-09 | `pause <id>` | Agent freezes mid-step, browser stays open |
+| UC-10 | `resume-agent <id>` | Unfreezes agent, continues from current state |
+| UC-11 | `inject <id> "prompt"` | Replaces task mid-execution, auto-resumes |
+| UC-12 | Auto-pause on login | Agent detects auth URLs, pauses after 2 hits |
 
 ## Setup
 
