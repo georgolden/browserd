@@ -90,7 +90,7 @@ class DaemonServer:
                 keep_open=cmd.get("keep_open", False),
                 close_tabs=cmd.get("close_tabs", True),
                 max_steps=cmd.get("max_steps", self.config.default_max_steps),
-                model=cmd.get("model", self.config.default_model),
+                model=cmd.get("model", self.config.llm_model or self.config.default_model),
                 session_id=cmd.get("session_id"),
                 tab_target_id=cmd.get("tab_target_id"),
                 new_tab=cmd.get("new_tab", False),
@@ -141,6 +141,21 @@ class DaemonServer:
         elif action == "logs":
             logs = self.manager.db.get_logs(tid or "", tail=cmd.get("tail", 50))
             return {"type": "task_logs", "id": tid, "logs": logs}
+
+        elif action == "steps":
+            # Get step_data entries for real-time agent awareness
+            logs = self.manager.db.get_logs(
+                tid or "", tail=cmd.get("tail", 20),
+                level_filter="step_data"
+            )
+            # Parse step_data JSON
+            steps = []
+            for log in logs:
+                try:
+                    steps.append(json.loads(log["message"]))
+                except Exception:
+                    steps.append({"raw": log["message"][:200]})
+            return {"type": "task_steps", "id": tid, "steps": steps}
 
         elif action == "state":
             target = cmd.get("target", "system")

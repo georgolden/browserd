@@ -171,6 +171,9 @@ class PortPool:
         Path(user_data_dir).mkdir(parents=True, exist_ok=True)
 
         _log(f"[POOL] _launch spawning {self.browser_kinds[port]} on :{port}")
+        env = os.environ.copy()
+        if not env.get("DISPLAY"):
+            env["DISPLAY"] = ":0"  # default X display
         proc = await asyncio.create_subprocess_exec(
             str(path),
             f"--remote-debugging-port={port}",
@@ -179,6 +182,7 @@ class PortPool:
             f"--user-data-dir={user_data_dir}",
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
+            env=env,
         )
         self.procs[port] = proc
 

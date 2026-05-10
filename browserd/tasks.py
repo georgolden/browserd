@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from browserd.models import DaemonConfig
 from browserd.db import TaskDB
-from browserd.portpool import PortPool
+from browserd.portpool import PortPool, _log
 
 if TYPE_CHECKING:
     from browser_use import Browser
@@ -291,13 +291,15 @@ class TaskManager:
     async def _dequeue(self) -> None:
         # Pick the first queued task not already being processed
         queued = self.db.list_tasks("queued")
+        _log(f"[DEQUEUE] checking {len(queued)} queued tasks, {len(self.running)} running, sem avail={self.semaphore._value}")
         for t in queued:
             tid = t["id"]
             if tid not in self.running:
-                print(f"[DEQUEUE] Spawning {tid} at {self._now()[:19]}", flush=True)
+                _log(f"[DEQUEUE] Spawning {tid} at {self._now()[:19]}")
                 task = asyncio.create_task(self._run_with_semaphore(tid))
                 self.running[tid] = task
                 return
+        _log(f"[DEQUEUE] nothing to spawn (all queued tasks already in running)")
 
     async def _run_with_semaphore(self, task_id: str) -> None:
         print(f"[SEMAPHORE] {task_id[:8]} entering import at {self._now()[11:19]}", flush=True)
@@ -485,7 +487,11 @@ class TaskManager:
                 "4. Summarize clearly in final response with website names and URLs"
             )
 
-            step_state: dict[str, Any] = {"step": 0, "url": "", "login_hits": 0}
+            step_state: dict[str, Any] = {
+                "step": 0, "url": "", "login_hits": 0,
+                "url_history": [],     # last 10 URLs for loop detection
+                "loop_warned": False,
+            }
 
             async def on_step(state: Any, output: Any, step: int) -> None:
                 step_state["step"] = step
@@ -493,7 +499,58 @@ class TaskManager:
                 step_state["url"] = url
                 if url and any(p in url.lower() for p in AUTH_PATTERNS):
                     step_state["login_hits"] += 1
+
+                # ── Loop detection ──
+                history = step_state["url_history"]
+                history.append(url)
+                if len(history) > 10:
+                    history.pop(0)
+
+                if len(history) >= 4:
+                    url_counts = {}
+                    for u in history:
+                        url_counts[u] = url_counts.get(u, 0) + 1
+                    most_repeated = max(url_counts.values())
+                    if most_repeated >= 3 and not step_state["loop_warned"]:
+                        step_state["loop_warned"] = True
+                        repeated_url = max(url_counts, key=url_counts.get)
+                        msg = (f"LOOP DETECTED: '{repeated_url[:80]}' visited "
+                               f"{most_repeated}x in last {len(history)} steps")
+                        self.db.add_log(task_id, step, "warn", msg)
+                        print(f"[LOOP] {task_id[:8]} {msg}", flush=True)
+
                 self.db.update_task(task_id, step_count=step, current_url=url)
+
+                # ── Store full step data for real-time awareness ──
+                try:
+                    step_data = {
+                        "step": step,
+                        "url": url,
+                        "title": getattr(state, "title", "") or "",
+                    }
+                    # Extract model's thinking from output
+                    if output is not None:
+                        if hasattr(output, "thinking") and output.thinking:
+                            step_data["thinking"] = str(output.thinking)[:500]
+                        if hasattr(output, "evaluation") and output.evaluation:
+                            step_data["evaluation"] = str(output.evaluation)[:200]
+                        # Extract action type
+                        if hasattr(output, "action") and output.action:
+                            action_list = output.action if isinstance(output.action, list) else [output.action]
+                            step_data["actions"] = [
+                                a.model_dump() if hasattr(a, "model_dump") else str(a)
+                                for a in action_list[:3]
+                            ]
+                    # Extract page content snapshot
+                    if hasattr(state, "dom_state") and state.dom_state:
+                        try:
+                            text = state.dom_state.get_llm_representation() if hasattr(state.dom_state, "get_llm_representation") else ""
+                            step_data["page_snapshot"] = text[:800] if text else ""
+                        except Exception:
+                            pass
+                    self.db.add_log(task_id, step, "step_data", json.dumps(step_data, default=str))
+                except Exception as e:
+                    self.db.add_log(task_id, step, "step_data", json.dumps({"error": str(e)[:200]}))
 
             agent = Agent(
                 task=t["prompt"],
@@ -589,7 +646,14 @@ class TaskManager:
 
             # ── Cleanup ──
             if t["close_tabs"] and not blocked:
-                await self._close_tabs(session, created_targets, session_id)
+                if session_id:
+                    # Session task: close only tracked tabs
+                    await self._close_tabs(session, created_targets, session_id)
+                else:
+                    # No session: close ALL page tabs on this browser
+                    await self._close_all_tabs(session, port)
+                # Also close leftover about:blank tabs from agent startup
+                await self._close_blank_tabs(session, port)
             elif keep_open and not blocked:
                 self.db.add_log(task_id, None, "info",
                               f"Tab kept open in session {session_id}")
@@ -666,6 +730,71 @@ class TaskManager:
             except Exception:
                 if session_id:
                     self.db.update_tab_status(session_id, tid, "detached")
+
+    async def _close_blank_tabs(self, session: Browser | None, port: int) -> None:
+        """Close leftover about:blank tabs created during agent startup, via direct HTTP."""
+        try:
+            import aiohttp
+            cdp_url = f"http://localhost:{port}"
+            async with aiohttp.ClientSession() as http:
+                async with http.get(f"{cdp_url}/json", timeout=aiohttp.ClientTimeout(total=3)) as resp:
+                    if resp.status != 200:
+                        return
+                    targets = await resp.json()
+
+                for t in targets:
+                    if t.get('type') != 'page':
+                        continue
+                    url = t.get('url', '')
+                    title = t.get('title', '')
+                    tid = t.get('id', '')
+                    if (url == 'about:blank' and 'Starting agent' in title) or \
+                       (url == 'about:blank' and not title):
+                        try:
+                            async with http.get(
+                                f"{cdp_url}/json/close/{tid}",
+                                timeout=aiohttp.ClientTimeout(total=2)
+                            ) as cr:
+                                if cr.status == 200:
+                                    print(f"[CLEANUP] Closed leftover blank tab {tid[:12]} on port {port}", flush=True)
+                        except Exception:
+                            pass
+        except Exception as e:
+            print(f"[CLEANUP] _close_blank_tabs error: {e}", flush=True)
+
+    async def _close_all_tabs(self, session: Browser | None, port: int) -> None:
+        """Close all page tabs on a browser via direct CDP HTTP (bypasses agent session)."""
+        try:
+            import aiohttp
+            cdp_url = f"http://localhost:{port}"
+            async with aiohttp.ClientSession() as http:
+                # Get all targets
+                async with http.get(f"{cdp_url}/json", timeout=aiohttp.ClientTimeout(total=3)) as resp:
+                    if resp.status != 200:
+                        return
+                    targets = await resp.json()
+
+                closed = 0
+                for t in targets:
+                    if t.get('type') != 'page':
+                        continue
+                    tid = t.get('id', '')
+                    if not tid:
+                        continue
+                    try:
+                        async with http.get(
+                            f"{cdp_url}/json/close/{tid}",
+                            timeout=aiohttp.ClientTimeout(total=2)
+                        ) as cr:
+                            if cr.status == 200:
+                                closed += 1
+                    except Exception:
+                        pass
+
+                if closed:
+                    print(f"[CLEANUP] Closed {closed} tabs on port {port}", flush=True)
+        except Exception as e:
+            print(f"[CLEANUP] _close_all_tabs error: {e}", flush=True)
 
     @staticmethod
     def _now() -> str:

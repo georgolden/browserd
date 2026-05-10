@@ -140,11 +140,17 @@ class TaskDB:
         )
         self._conn.commit()
 
-    def get_logs(self, task_id: str, tail: int = 50) -> list[dict]:
-        rows = self._conn.execute(
-            "SELECT * FROM task_logs WHERE task_id=? ORDER BY id DESC LIMIT ?",
-            (task_id, tail),
-        ).fetchall()
+    def get_logs(self, task_id: str, tail: int = 50, level_filter: str | None = None) -> list[dict]:
+        if level_filter:
+            rows = self._conn.execute(
+                "SELECT * FROM task_logs WHERE task_id=? AND level=? ORDER BY id DESC LIMIT ?",
+                (task_id, level_filter, tail),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM task_logs WHERE task_id=? ORDER BY id DESC LIMIT ?",
+                (task_id, tail),
+            ).fetchall()
         return [dict(r) for r in reversed(rows)]
 
     # ── Sessions CRUD ──────────────────────────────────────────────────────

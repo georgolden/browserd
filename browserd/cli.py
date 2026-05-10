@@ -54,14 +54,17 @@ async def cmd_run(client, args):
     sid = resp.get("session_id", "")
     tab = resp.get("tab_target_id", "")
 
-    if args.json:
+    if args.json and not args.wait:
         print(json.dumps({"id": tid, "session_id": sid, "tab_target_id": tab, "status": "queued"}))
     elif args.wait:
-        context = f" (session: {sid})" if sid else ""
-        if tab:
-            context += f" (tab: {tab})"
-        print(f"Running: {tid}{context} — waiting...")
-        await _wait_result(client, tid, args.timeout, args.json)
+        if args.json:
+            await _wait_result(client, tid, args.timeout, json_out=True)
+        else:
+            context = f" (session: {sid})" if sid else ""
+            if tab:
+                context += f" (tab: {tab})"
+            print(f"Running: {tid}{context} — waiting...")
+            await _wait_result(client, tid, args.timeout, json_out=False)
     else:
         context = ""
         if sid:
@@ -149,6 +152,36 @@ async def cmd_cancel(client, args):
         die(resp["message"])
     print(f"Cancelled: {args.id}")
 
+
+async def cmd_steps(client, args):
+    """Show agent step data — thinking, actions, page state for real-time awareness."""
+    resp = await client.steps(args.id, args.tail)
+    steps = resp.get("steps", [])
+    if not steps:
+        print("No step data yet (task may not have started)")
+        return
+    for s in steps:
+        step = s.get("step", "?")
+        url = s.get("url", "")[:70]
+        # Show what the agent was thinking
+        if "thinking" in s:
+            print(f"\n── Step {step} @ {url} ──")
+            print(f"  💭 {s['thinking'][:200]}")
+        elif "evaluation" in s:
+            print(f"\n── Step {step} @ {url} ──")
+            print(f"  📋 Eval: {s['evaluation'][:200]}")
+        # Show actions
+        actions = s.get("actions", [])
+        if actions:
+            for a in actions:
+                if isinstance(a, dict):
+                    action_type = a.get("type", a.get("action", "?"))
+                    details = {k: str(v)[:60] for k, v in a.items() if k != "type" and v}
+                    print(f"  ▶ {action_type}: {details}")
+        elif "error" in s:
+            print(f"  ⚠ {s['error']}")
+        else:
+            print(f"\n── Step {step} @ {url} ── (no detail)")
 
 async def cmd_logs(client, args):
     resp = await client.logs(args.id, args.tail)
@@ -467,6 +500,11 @@ def build_parser():
     lg = s.add_parser("logs", aliases=["log"]); lg.add_argument("id")
     lg.add_argument("--tail", "-n", type=int, default=50)
 
+    # steps — real-time agent step awareness
+    sp = s.add_parser("steps", aliases=["step"], help="View agent step data (thinking, actions, page state)")
+    sp.add_argument("id")
+    sp.add_argument("--tail", "-n", type=int, default=10)
+
     # state subcommands
     s.add_parser("state-tasks", aliases=["st-t"]).add_argument("--json", "-j", action="store_true")
     s.add_parser("state-sessions", aliases=["st-s"]).add_argument("--json", "-j", action="store_true")
@@ -532,6 +570,7 @@ def main():
         "resume": "cmd_resume", "unblock": "cmd_resume",
         "cancel": "cmd_cancel", "kill": "cmd_cancel", "stop": "cmd_cancel",
         "logs": "cmd_logs", "log": "cmd_logs",
+        "steps": "cmd_steps", "step": "cmd_steps",
         "state-tasks": "cmd_state_tasks", "st-t": "cmd_state_tasks",
         "state-sessions": "cmd_state_sessions", "st-s": "cmd_state_sessions",
         "state-session": "cmd_state_session", "st-si": "cmd_state_session", "session-info": "cmd_state_session",

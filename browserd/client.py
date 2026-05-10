@@ -76,6 +76,9 @@ class BrowserClient:
     async def logs(self, task_id: str, tail: int = 50) -> dict:
         return await self.send({"cmd": "logs", "id": task_id, "tail": tail})
 
+    async def steps(self, task_id: str, tail: int = 20) -> dict:
+        return await self.send({"cmd": "steps", "id": task_id, "tail": tail})
+
     # State queries
     async def state_tasks(self) -> dict:
         return await self.send({"cmd": "state", "target": "tasks"})
