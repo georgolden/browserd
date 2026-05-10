@@ -1,6 +1,6 @@
 # BrowserD
 
-A daemon that makes [browser-use](https://github.com/browser-use/browser-use) production-ready for AI agents. It handles the operational heavy lifting — managing parallel Chrome instances, persistent sessions, and task queuing — so agents can focus on browsing, not infrastructure.
+A daemon that makes [browser-use](https://github.com/browser-use/browser-use) more comfortable for AI agents to use. Instead of agents having to manage browser processes, ports, sessions, and task queues themselves, BrowserD runs as a background service that handles all of that — so agents just send tasks and get results.
 
 ## What it does
 
@@ -11,8 +11,6 @@ BrowserD runs as a background service. AI agents (or any client) send tasks over
 - **Crash recovery** — if Chrome dies, the session remembers which tabs were open and restores them automatically.
 - **Task queuing** — submitting 10 tasks when only 4 ports are available? No problem — the extras queue up and run when a port frees.
 - **Simple CLI** — designed for both humans and agents. Every command has JSON output mode so agent toolchains can parse responses.
-
-In short: BrowserD gives AI agents the same kind of managed browser infrastructure you'd build for a production scraping pipeline.
 
 ## Quick Start
 
