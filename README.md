@@ -1,33 +1,30 @@
-# BrowserD v2.0.0
+# BrowserD
 
-Browser automation daemon that manages parallel Chrome instances for AI agents. Wraps [browser-use](https://github.com/browser-use/browser-use) with a port-pool architecture — each task claims a dedicated Chrome process (not a tab) via unique `--remote-debugging-port=N` + `--user-data-dir`.
+A daemon that makes [browser-use](https://github.com/browser-use/browser-use) production-ready for AI agents. It handles the operational heavy lifting — managing parallel Chrome instances, persistent sessions, and task queuing — so agents can focus on browsing, not infrastructure.
 
-## Architecture
+## What it does
 
-```
-PortPool → N Chrome instances (ports 9222–9222+N-1), isolated user-data-dirs
-TaskManager → asyncio.Semaphore(N), session-aware task lifecycle
-DaemonServer → Unix socket JSON-line protocol (~/.browserd/sock)
-BrowserClient → async socket client
-CLI → argparse wrapper (browser-cli)
-```
+BrowserD runs as a background service. AI agents (or any client) send tasks over a Unix socket, and BrowserD handles everything else:
+
+- **Parallel execution** — spawns isolated Chrome instances, one per task. Configure how many run at once with `MAX_PARALLEL_TASKS`.
+- **Persistent sessions** — keep a browser alive across multiple tasks. Agents can start a session, run several follow-up tasks, and close it when done.
+- **Crash recovery** — if Chrome dies, the session remembers which tabs were open and restores them automatically.
+- **Task queuing** — submitting 10 tasks when only 4 ports are available? No problem — the extras queue up and run when a port frees.
+- **Simple CLI** — designed for both humans and agents. Every command has JSON output mode so agent toolchains can parse responses.
+
+In short: BrowserD gives AI agents the same kind of managed browser infrastructure you'd build for a production scraping pipeline.
 
 ## Quick Start
 
 ```bash
-# Install
-git clone <repo-url> && cd browserd
+git clone https://github.com/georgolden/browserd && cd browserd
 python3 -m venv ~/.local/share/browserd/venv
 ~/.local/share/browserd/venv/bin/pip install -e .
 
-# Configure
 mkdir -p ~/.browserd
 echo 'DEEPSEEK_API_KEY=sk-...' > ~/.browserd/.env
 
-# Start
 systemctl --user enable --now browserd
-
-# Verify
 browser-cli ping
 ```
 
@@ -38,21 +35,16 @@ BrowserD reads environment variables from `~/.browserd/.env` at startup.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DEEPSEEK_API_KEY` | (required) | DeepSeek API key for the LLM agent |
-| `MAX_PARALLEL_TASKS` | `4` | Max parallel Chrome instances (1–16). Controls how many tasks can run simultaneously. |
-| `BROWSERD_PORT_BASE` | (hardcoded: 9222) | First port in the CDP port range |
+| `MAX_PARALLEL_TASKS` | `4` | How many Chrome instances can run simultaneously (1–16) |
 
 ### Setting environment variables
 
-Use the CLI to set variables securely (prompts for value — never appears in shell history):
-
 ```bash
-browser-cli set setenv MAX_PARALLEL_TASKS
-# → Value for MAX_PARALLEL_TASKS: [type value, press Enter]
-# → ✅ Set MAX_PARALLEL_TASKS in ~/.browserd/.env
-# → Restart browserd for changes to take effect: browser-cli daemon restart
+browser-cli set setenv MAX_PARALLEL_TASKS   # prompts for value (hidden input)
+browser-cli daemon restart                  # apply changes
 ```
 
-Or edit `~/.browserd/.env` directly:
+Or edit the file directly:
 
 ```bash
 echo 'MAX_PARALLEL_TASKS=8' >> ~/.browserd/.env
@@ -60,68 +52,48 @@ echo 'MAX_PARALLEL_TASKS=8' >> ~/.browserd/.env
 
 ## CLI Commands
 
-### Task Management
+### Running tasks
 
 ```bash
-browser-cli run "your task prompt"          # Fire-and-forget
-browser-cli run "prompt" --keep-open         # Keep browser open (auto-creates session)
-browser-cli run --session <id> "prompt"     # Continue in existing session
-browser-cli run "prompt" --wait              # Wait for completion
-browser-cli run "prompt" --json              # JSON output
-
-browser-cli list                             # List all tasks
-browser-cli list --status running            # Filter by status
-
-browser-cli status <task-id>                 # Task details
-browser-cli result <task-id>                 # Task result output
-browser-cli logs <task-id>                   # Task logs (--tail N)
-browser-cli wait <task-id>                   # Wait for completion (--timeout N)
-
-browser-cli resume <task-id>                 # Resume blocked task
-browser-cli cancel <task-id>                 # Cancel task
+browser-cli run "find the top HN post today"      # Fire-and-forget
+browser-cli run "log in to my account" --keep-open  # Keep browser open (creates session)
+browser-cli run --session <id> "do next thing"      # Continue in existing session
+browser-cli run "scrape products" --wait             # Wait for result before returning
+browser-cli run "scrape products" --json             # JSON output for agent consumption
 ```
 
-### State Inspection
+### Managing tasks
 
 ```bash
-browser-cli state-system                     # Full overview (ports, sessions, tasks)
-browser-cli state-tasks                      # Running + queued tasks
-browser-cli state-sessions                   # All sessions with tab counts
-browser-cli state-session <session-id>       # Session detail with tabs
-browser-cli session-close <session-id>        # Close session
+browser-cli list                     # All tasks
+browser-cli list --status running    # Filter by status
+browser-cli status <task-id>         # Current state + step count + URL
+browser-cli result <task-id>         # Final output (parsed result)
+browser-cli logs <task-id>           # Step-by-step logs (--tail N)
+browser-cli wait <task-id>           # Block until done (--timeout N)
+browser-cli resume <task-id>         # Retry a blocked login/auth task
+browser-cli cancel <task-id>         # Kill a running task, free its port
 ```
 
-### Configuration
+### Inspecting state
 
 ```bash
-browser-cli set setenv <KEY>                 # Set env var (prompts for value)
+browser-cli state-system              # Everything: ports, sessions, task counts
+browser-cli state-tasks               # Running + queued tasks
+browser-cli state-sessions            # All sessions with tab counts
+browser-cli state-session <id>        # Session tabs, URLs, associated tasks
+browser-cli session-close <id>        # Close session, free its port
 ```
 
-### Service Control
+### Configuration and service
 
 ```bash
-browser-cli daemon restart                   # Restart browserd
-browser-cli daemon stop                      # Stop browserd
-browser-cli daemon start                     # Start browserd
-browser-cli daemon enable                    # Enable auto-start on boot
-browser-cli daemon disable                   # Disable auto-start
-browser-cli daemon status                    # Show service status
-```
-
-### Utility
-
-```bash
-browser-cli ping                             # Health check
-```
-
-## Development
-
-- Python >= 3.10, async/await
-- Pydantic v2 models, `from __future__ import annotations`
-- Heavy imports (browser_use) inside methods, not module top
-- `TYPE_CHECKING` guards for inter-module references
-
-```bash
-pip install -e .
-pytest
+browser-cli set setenv <KEY>          # Set env var (prompts securely for value)
+browser-cli daemon restart            # Restart the service
+browser-cli daemon stop               # Stop the service
+browser-cli daemon start              # Start the service
+browser-cli daemon enable             # Auto-start on boot
+browser-cli daemon disable            # Disable auto-start
+browser-cli daemon status             # Show service status
+browser-cli ping                      # Health check
 ```
