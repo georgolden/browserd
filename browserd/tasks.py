@@ -22,6 +22,77 @@ AUTH_PATTERNS = (
 )
 
 
+def _build_llm(config: DaemonConfig, model_override: str | None = None):
+    """Build an LLM instance from provider config.
+
+    Resolves the provider from config.llm_provider, loads the chat class
+    dynamically, and constructs it with the appropriate API key and model.
+    Falls back to ChatDeepSeek if the provider is unknown.
+    """
+    from browserd.providers import PROVIDERS
+
+    provider = PROVIDERS.get(config.llm_provider)
+    if provider is None:
+        # Unknown provider — fall back to DeepSeek
+        from browser_use.llm.deepseek.chat import ChatDeepSeek
+        return ChatDeepSeek(
+            model=model_override or config.llm_model or "deepseek-chat",
+            api_key=config.deepseek_api_key or os.environ.get("DEEPSEEK_API_KEY", ""),
+        )
+
+    # Dynamic import of chat class
+    import importlib
+    module = importlib.import_module(provider["import_path"])
+    chat_cls = getattr(module, provider["attr"])
+
+    # Resolve model
+    model = model_override or config.llm_model or provider["default_model"]
+
+    # Build kwargs based on provider type
+    kwargs: dict[str, Any] = {"model": model}
+
+    env_vars = provider.get("env_vars", [])
+
+    if provider.get("no_api_key"):
+        # Local providers (Ollama, LiteLLM) — use base_url if configured
+        for ev in provider.get("extra_prompts", []):
+            env_key = ev[0]
+            val = os.environ.get(env_key)
+            if val:
+                if env_key == "OLLAMA_BASE_URL" or env_key == "LITELLM_BASE_URL":
+                    kwargs["base_url"] = val.rstrip("/")
+    elif provider["attr"] == "ChatAzureOpenAI":
+        # Azure needs azure_endpoint instead of api_key
+        kwargs["azure_endpoint"] = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
+        kwargs["api_version"] = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21")
+        api_key = os.environ.get(env_vars[0], "") if env_vars else ""
+        if not kwargs["azure_endpoint"]:
+            # Fall back to api_key-only if no endpoint configured
+            kwargs["api_key"] = api_key or config.deepseek_api_key or ""
+            del kwargs["azure_endpoint"]
+        else:
+            kwargs["api_key"] = api_key or ""
+    else:
+        # Standard API key providers
+        api_key = ""
+        for ev in env_vars:
+            api_key = os.environ.get(ev, "")
+            if api_key:
+                break
+        if not api_key and config.deepseek_api_key:
+            api_key = config.deepseek_api_key
+
+        # ChatOpenRouter needs explicit api_key param (doesn't auto-detect env)
+        if provider["attr"] == "ChatOpenRouter":
+            kwargs["api_key"] = api_key or ""
+        else:
+            # Most classes auto-detect from env, but passing explicitly is fine
+            if api_key:
+                kwargs["api_key"] = api_key
+
+    return chat_cls(**kwargs)
+
+
 class TaskManager:
     """Manages task queue, execution, sessions, and browser CDP port pool.
 
@@ -302,7 +373,6 @@ class TaskManager:
 
         try:
             from browser_use import Agent, Browser
-            from browser_use.llm import ChatDeepSeek
 
             # Resolve session state
             if session_id:
@@ -405,10 +475,7 @@ class TaskManager:
                 created_targets.append(result['targetId'])
 
             # LLM
-            llm = ChatDeepSeek(
-                model=t["model"],
-                api_key=self.config.deepseek_api_key or os.environ.get("DEEPSEEK_API_KEY", ""),
-            )
+            llm = _build_llm(self.config, t.get("model"))
 
             extend = (
                 "You are a thorough web research agent.\n"

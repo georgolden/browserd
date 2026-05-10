@@ -5,10 +5,11 @@ BrowserD is a browser automation daemon that manages parallel Chrome instances f
 ## Architecture
 
 ```
-PortPool  → 4 Chrome instances (ports 9222–9225), isolated user-data-dirs
+PortPool  → N Chrome instances (ports 9222–9222+N-1), isolated user-data-dirs
 TaskManager → asyncio.Semaphore(N), session-aware task lifecycle
 DaemonServer → Unix socket JSON-line protocol (~/.browserd/sock)
 BrowserClient → async socket client
+Providers → dynamic LLM class resolution (browserd/providers.py)
 CLI → argparse wrapper (browser-cli)
 ```
 
@@ -17,6 +18,7 @@ CLI → argparse wrapper (browser-cli)
 | File | What |
 |------|------|
 | `browserd/models.py` | Pydantic v2: DaemonConfig, TaskRecord, SessionRecord, TabRecord |
+| `browserd/providers.py` | Provider registry: maps provider IDs to browser-use chat classes, env vars, models |
 | `browserd/db.py` | SQLite WAL: tasks, sessions, session_tabs tables |
 | `browserd/portpool.py` | Chrome process spawn/kill, port lifecycle with asyncio.Lock |
 | `browserd/tasks.py` | TaskManager: queue, dequeue, _run_task, session handling, state reconciliation |

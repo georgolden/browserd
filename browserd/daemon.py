@@ -234,9 +234,19 @@ async def _main_async() -> None:
         loop.add_signal_handler(sig, lambda: asyncio.create_task(stop()))
 
     await server.start()
-    print(f"[browserd] v2.0.0 — SQLite at {config.db_path}")
+    print(f"[browserd] — SQLite at {config.db_path}")
     print(f"[browserd] Port pool: {min(config.port_range)}-{max(config.port_range)} ({config.max_parallel} ports)")
     print(f"[browserd] Ready. Control: browser-cli <cmd>")
+
+    # Resolve effective model for logging
+    actual_model = config.llm_model
+    if not actual_model:
+        try:
+            from browserd.providers import PROVIDERS
+            actual_model = PROVIDERS.get(config.llm_provider, {}).get("default_model", "?")
+        except Exception:
+            actual_model = "?"
+    print(f"[browserd] LLM: {config.llm_provider} / {actual_model}")
 
     try:
         while True:

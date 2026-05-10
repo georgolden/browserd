@@ -59,6 +59,14 @@ class DaemonConfig(BaseModel):
         default_factory=lambda: int(os.environ.get("MAX_PARALLEL_TASKS", "4")),
         ge=1, le=16,
     )
+    llm_provider: str = Field(
+        default_factory=lambda: os.environ.get("LLM_PROVIDER", "deepseek"),
+        description="Provider ID from provider registry (e.g. openai, anthropic, deepseek)",
+    )
+    llm_model: str | None = Field(
+        default_factory=lambda: os.environ.get("LLM_MODEL") or None,
+        description="Model override — uses provider default if unset",
+    )
     default_max_steps: int = Field(default=30, ge=1)
     default_model: str = Field(default="deepseek-chat")
     step_timeout: int = Field(default=120, ge=10)

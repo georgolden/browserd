@@ -32,8 +32,44 @@ BrowserD reads environment variables from `~/.browserd/.env` at startup.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DEEPSEEK_API_KEY` | (required) | DeepSeek API key for the LLM agent |
+| `LLM_PROVIDER` | `deepseek` | LLM provider ID (see table below) |
+| `LLM_MODEL` | provider default | Model name override (optional) |
+| `DEEPSEEK_API_KEY` | — | API key for your chosen provider |
 | `MAX_PARALLEL_TASKS` | `4` | How many Chrome instances can run simultaneously (1–16) |
+
+### LLM Providers
+
+BrowserD supports all providers that browser-use supports. Set `LLM_PROVIDER` and the corresponding API key:
+
+| Provider ID | API Key Env Var | Default Model |
+|-------------|-----------------|---------------|
+| `deepseek` | `DEEPSEEK_API_KEY` | `deepseek-chat` |
+| `openai` | `OPENAI_API_KEY` | `gpt-4.1-mini` |
+| `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-0` |
+| `google` | `GOOGLE_API_KEY` | `gemini-2.5-flash` |
+| `browser-use` | `BROWSER_USE_API_KEY` | `bu-latest` |
+| `groq` | `GROQ_API_KEY` | `meta-llama/llama-4-maverick` |
+| `mistral` | `MISTRAL_API_KEY` | `mistral-large-latest` |
+| `azure` | `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_ENDPOINT` | `gpt-4o` |
+| `cerebras` | `CEREBRAS_API_KEY` | `llama-3.3-70b` |
+| `ollama` | none (local) | `llama3` |
+| `openrouter` | `OPENROUTER_API_KEY` | `openai/gpt-4o` |
+| `vercel` | `AI_GATEWAY_API_KEY` | `anthropic/claude-3.5-sonnet` |
+| `litellm` | none (local proxy) | `openai/gpt-4o` |
+
+### Interactive Setup
+
+The easiest way to configure everything:
+
+```bash
+browser-cli setup
+```
+
+Walks through:
+1. Pick a provider from the list
+2. Pick a model (or type your own)
+3. Enter your API key (hidden input)
+4. Saved to `~/.browserd/.env`
 
 ### Setting environment variables
 
@@ -86,8 +122,9 @@ browser-cli session-close <id>        # Close session, free its port
 ### Configuration and service
 
 ```bash
-browser-cli set setenv <KEY>          # Set env var (prompts securely for value)
-browser-cli daemon restart            # Restart the service
+browser-cli setup                      # Interactive wizard: pick provider → model → API key
+browser-cli set setenv <KEY>           # Set env var (prompts securely for value)
+browser-cli daemon restart             # Restart the service
 browser-cli daemon stop               # Stop the service
 browser-cli daemon start              # Start the service
 browser-cli daemon enable             # Auto-start on boot

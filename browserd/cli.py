@@ -190,6 +190,120 @@ async def cmd_setenv(args):
     print(f"   Restart browserd for changes to take effect: browser-cli daemon restart")
 
 
+def cmd_setup() -> None:
+    """Interactive setup wizard: choose LLM provider, model, and API key."""
+    import getpass
+    from pathlib import Path
+    from browserd.providers import PROVIDERS, list_providers
+
+    print("\n  ═══ BrowserD Setup ═══\n")
+    print("  Choose your LLM provider:\n")
+
+    plist = list_providers()
+    for i, p in enumerate(plist, 1):
+        print(f"  {i:>2}. {p['name']:<20}  (default: {p['default_model']})")
+
+    # Provider selection
+    try:
+        choice = input(f"\n  Provider [1-{len(plist)}] (default: 1): ").strip()
+        idx = int(choice) - 1 if choice else 0
+        if idx < 0 or idx >= len(plist):
+            die("Invalid selection.")
+    except (ValueError, EOFError):
+        die("Cancelled.")
+
+    pid = plist[idx]["id"]
+    provider = PROVIDERS[pid]
+    print(f"\n  ✅ Provider: {provider['name']}")
+
+    # Model selection
+    models = provider.get("models", [])
+    if models:
+        print(f"\n  Available models for {provider['name']}:")
+        for i, m in enumerate(models, 1):
+            marker = " (default)" if i == 1 else ""
+            print(f"  {i:>2}. {m}{marker}")
+        print(f"  {'':>2}  (or type any model name)")
+        try:
+            model_choice = input(f"\n  Model [1-{len(models)}] (default: 1): ").strip()
+            if not model_choice:
+                selected_model = models[0]
+            else:
+                try:
+                    idx2 = int(model_choice) - 1
+                    if 0 <= idx2 < len(models):
+                        selected_model = models[idx2]
+                    else:
+                        selected_model = model_choice
+                except ValueError:
+                    selected_model = model_choice
+        except EOFError:
+            die("Cancelled.")
+    else:
+        selected_model = input(
+            f"\n  Model name (default: {provider['default_model']}): "
+        ).strip()
+        if not selected_model:
+            selected_model = provider["default_model"]
+
+    print(f"  ✅ Model: {selected_model}")
+
+    # API key
+    env_lines: dict[str, str] = {}
+
+    if not provider.get("no_api_key"):
+        key_env = provider["env_vars"][0]
+        try:
+            api_key = getpass.getpass(f"\n  {key_env}: ").strip()
+            if not api_key:
+                die("API key is required — aborting.")
+        except EOFError:
+            die("Cancelled.")
+        env_lines[key_env] = f"{key_env}={api_key}"
+        print(f"  ✅ {key_env} set")
+    else:
+        print(f"\n  (no API key needed for {provider['name']})")
+
+    # Extra prompts (Azure endpoint, Ollama URL, etc.)
+    for ev_key, label, default in provider.get("extra_prompts", []):
+        try:
+            val = input(f"\n  {label} (default: {default}): ").strip()
+        except EOFError:
+            die("Cancelled.")
+        env_lines[ev_key] = f"{ev_key}={val or default}"
+        print(f"  ✅ {ev_key} set")
+
+    # Provider + model env vars
+    env_lines["LLM_PROVIDER"] = f"LLM_PROVIDER={pid}"
+    env_lines["LLM_MODEL"] = f"LLM_MODEL={selected_model}"
+
+    # Merge with existing .env
+    env_path = Path.home() / ".browserd" / ".env"
+    existing: dict[str, str] = {}
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k = line.partition("=")[0].strip()
+                existing[k] = line
+
+    existing.update(env_lines)
+
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text("\n".join(existing.values()) + "\n")
+
+    print(f"\n  ═══ Configuration saved to {env_path} ═══")
+    print(f"  LLM_PROVIDER={pid}")
+    print(f"  LLM_MODEL={selected_model}")
+    if not provider.get("no_api_key"):
+        print(f"  {provider['env_vars'][0]}=<set>")
+    for ev_key, _, _ in provider.get("extra_prompts", []):
+        print(f"  {ev_key}={env_lines[ev_key].split('=',1)[1]}")
+
+    print(f"\n  Run this to apply changes:")
+    print(f"    browser-cli daemon restart")
+
+
 def cmd_daemon(action: str) -> None:
     """Run systemctl --user <action> browserd."""
     import subprocess
@@ -371,7 +485,10 @@ def build_parser():
     set_cmds = set_sub.add_subparsers(dest="set_cmd")
 
     setenv_p = set_cmds.add_parser("setenv", help="Set environment variable in ~/.browserd/.env")
-    setenv_p.add_argument("key", help="Environment variable name (e.g., BROWSERD_MAX_PARALLEL)")
+    setenv_p.add_argument("key", help="Environment variable name (e.g., MAX_PARALLEL_TASKS)")
+
+    # setup — interactive provider/model/key wizard
+    s.add_parser("setup", help="Interactive setup: choose LLM provider, model, and API key")
 
     # daemon — service lifecycle control
     daemon_sub = s.add_parser("daemon", help="Control the browserd systemd service")
@@ -394,6 +511,11 @@ def main():
     # "set" subcommands that don't need a daemon connection
     if args.cmd == "set" and args.set_cmd == "setenv":
         asyncio.run(cmd_setenv(args))
+        return
+
+    # "setup" — interactive wizard, no daemon connection needed
+    if args.cmd == "setup":
+        cmd_setup()
         return
 
     # "daemon" subcommands — systemctl wrapper, no daemon connection needed
