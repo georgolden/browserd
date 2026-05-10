@@ -162,6 +162,52 @@ async def cmd_ping(client, args):
     print(f"browserd v{resp.get('version','?')} — {resp.get('running',0)} tasks running")
 
 
+async def cmd_setenv(args):
+    """Set an environment variable in ~/.browserd/.env — prompts for value."""
+    import getpass
+    from pathlib import Path
+
+    env_path = Path.home() / ".browserd" / ".env"
+    value = getpass.getpass(f"Value for {args.key}: ")
+    if not value:
+        die("No value entered — aborting.")
+
+    # Read existing lines so we can update in-place
+    lines: dict[str, str] = {}
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                lines[k.strip()] = line
+
+    # Add or update
+    lines[args.key] = f"{args.key}={value}"
+
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text("\n".join(lines.values()) + "\n")
+    print(f"✅ Set {args.key} in {env_path}")
+    print(f"   Restart browserd for changes to take effect: browser-cli daemon restart")
+
+
+def cmd_daemon(action: str) -> None:
+    """Run systemctl --user <action> browserd."""
+    import subprocess
+
+    cmd = ["systemctl", "--user", action, "browserd"]
+    if action == "status":
+        result = subprocess.run(cmd, capture_output=False)
+        sys.exit(result.returncode)
+    else:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            print(f"✅ browserd {action} successful")
+            if result.stdout.strip():
+                print(result.stdout.strip())
+        else:
+            die(f"Failed to {action} browserd:\n{result.stderr.strip()}")
+
+
 # ── State commands ──────────────────────────────────────────────────────────
 
 async def cmd_state_tasks(client, args):
@@ -319,12 +365,41 @@ def build_parser():
 
     # ping
     s.add_parser("ping", aliases=["p"])
+
+    # set — manage daemon config/env
+    set_sub = s.add_parser("set", help="Manage daemon configuration")
+    set_cmds = set_sub.add_subparsers(dest="set_cmd")
+
+    setenv_p = set_cmds.add_parser("setenv", help="Set environment variable in ~/.browserd/.env")
+    setenv_p.add_argument("key", help="Environment variable name (e.g., BROWSERD_MAX_PARALLEL)")
+
+    # daemon — service lifecycle control
+    daemon_sub = s.add_parser("daemon", help="Control the browserd systemd service")
+    daemon_cmds = daemon_sub.add_subparsers(dest="daemon_cmd")
+
+    daemon_cmds.add_parser("restart", help="Restart browserd service")
+    daemon_cmds.add_parser("stop", help="Stop browserd service")
+    daemon_cmds.add_parser("start", help="Start browserd service")
+    daemon_cmds.add_parser("enable", help="Enable browserd to start on boot")
+    daemon_cmds.add_parser("disable", help="Disable browserd auto-start")
+    daemon_cmds.add_parser("status", help="Show browserd service status")
+
     return p
 
 
 def main():
     p = build_parser(); args = p.parse_args()
     if not args.cmd: p.print_help(); sys.exit(1)
+
+    # "set" subcommands that don't need a daemon connection
+    if args.cmd == "set" and args.set_cmd == "setenv":
+        asyncio.run(cmd_setenv(args))
+        return
+
+    # "daemon" subcommands — systemctl wrapper, no daemon connection needed
+    if args.cmd == "daemon" and args.daemon_cmd:
+        cmd_daemon(args.daemon_cmd)
+        return
 
     handlers = {
         "run": "cmd_run", "r": "cmd_run",

@@ -1,163 +1,127 @@
-# BrowserD v2.0
+# BrowserD v2.0.0
 
-Browser automation daemon with **parallel Chrome instances**, **persistent sessions**, and a **Unix socket CLI**.
-
-Wraps [browser-use](https://github.com/browser-use/browser-use) (v0.12.6) with a port-pool architecture — each task gets its own Chrome process on a dedicated CDP port.
-
-```bash
-browser-cli run "search for European funding databases"
-browser-cli run --keep-open "open gmail"
-browser-cli run --session inbox "summarize this email"
-browser-cli state system
-```
+Browser automation daemon that manages parallel Chrome instances for AI agents. Wraps [browser-use](https://github.com/browser-use/browser-use) with a port-pool architecture — each task claims a dedicated Chrome process (not a tab) via unique `--remote-debugging-port=N` + `--user-data-dir`.
 
 ## Architecture
 
 ```
-┌─────────────┐     Unix socket      ┌──────────────┐
-│ browser-cli │ ──── JSON-line ────→ │   browserd   │
-└─────────────┘     ~/.browserd/sock │  (daemon)    │
-                                     │              │
-                                     │ PortPool     │
-                                     │  :9222 :9223 │
-                                     │  :9224 :9225 │
-                                     │              │
-                                     │ TaskManager  │
-                                     │  Semaphore(N)│
-                                     │  Sessions    │
-                                     └──────┬───────┘
-                                            │ CDP
-                                     ┌──────┴───────┐
-                                     │  Chrome 1..N │
-                                     │  (isolated   │
-                                     │  profiles)   │
-                                     └──────────────┘
+PortPool → N Chrome instances (ports 9222–9222+N-1), isolated user-data-dirs
+TaskManager → asyncio.Semaphore(N), session-aware task lifecycle
+DaemonServer → Unix socket JSON-line protocol (~/.browserd/sock)
+BrowserClient → async socket client
+CLI → argparse wrapper (browser-cli)
 ```
 
-| Layer | What |
-|-------|------|
-| **Port Pool** | 4 parallel Chrome instances (ports 9222–9225), each with isolated `--user-data-dir` |
-| **Sessions** | Persistent task chains that survive browser crashes |
-| **Tabs** | Three statuses: active, detached (browser died), closed |
-| **Daemon** | Unix socket JSON-line protocol at `~/.browserd/sock` |
-| **CLI** | `browser-cli run|state|resume|cancel|...` |
-| **Storage** | SQLite WAL at `~/.browserd/tasks.db` |
-
-## Install
+## Quick Start
 
 ```bash
-# Clone + install
+# Install
+git clone <repo-url> && cd browserd
 python3 -m venv ~/.local/share/browserd/venv
-~/.local/share/browserd/venv/bin/pip install -e ~/projects/browserd
+~/.local/share/browserd/venv/bin/pip install -e .
 
-# Link to PATH (~/.local/bin must be in $PATH)
-ln -sf ~/.local/share/browserd/venv/bin/browserd ~/.local/bin/browserd
-ln -sf ~/.local/share/browserd/venv/bin/browser-cli ~/.local/bin/browser-cli
-
-# API key (DeepSeek)
+# Configure
+mkdir -p ~/.browserd
 echo 'DEEPSEEK_API_KEY=sk-...' > ~/.browserd/.env
 
-# Auto-start daemon
+# Start
 systemctl --user enable --now browserd
+
+# Verify
+browser-cli ping
 ```
 
-## Commands
+## Configuration
 
-### Tasks
+BrowserD reads environment variables from `~/.browserd/.env` at startup.
 
-| Command | What |
-|---------|------|
-| `browser-cli run "prompt"` | New task, tab closes after |
-| `browser-cli run --keep-open "prompt"` | New task, auto-creates session, tab stays |
-| `browser-cli run --session <id> "prompt"` | Task in existing session |
-| `browser-cli run --session <id> --tab <tid> "prompt"` | Task on specific tab |
-| `browser-cli run --session <id> --new-tab "prompt"` | Task in new tab within session |
-| `browser-cli run --wait "prompt"` | Block until done (no timeout = infinite) |
-| `browser-cli run --wait --timeout 120 "prompt"` | Block with timeout |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DEEPSEEK_API_KEY` | (required) | DeepSeek API key for the LLM agent |
+| `MAX_PARALLEL_TASKS` | `4` | Max parallel Chrome instances (1–16). Controls how many tasks can run simultaneously. |
+| `BROWSERD_PORT_BASE` | (hardcoded: 9222) | First port in the CDP port range |
 
-### Monitoring
+### Setting environment variables
 
-| Command | What |
-|---------|------|
-| `browser-cli list` | All tasks |
-| `browser-cli status <id>` | Task detail (steps, URL, errors) |
-| `browser-cli result <id>` | Task result text |
-| `browser-cli logs <id>` | Step-by-step execution logs |
-
-### State
-
-| Command | What |
-|---------|------|
-| `browser-cli state tasks` | Queue + running tasks |
-| `browser-cli state sessions` | All sessions with tab counts |
-| `browser-cli state session <id>` | Full session detail (tabs, statuses, tasks) |
-| `browser-cli state system` | Ports, sessions, task counts |
-
-### Control
-
-| Command | What |
-|---------|------|
-| `browser-cli resume <id>` | Resume blocked task |
-| `browser-cli cancel <id>` | Cancel task |
-| `browser-cli session-close <id>` | Close session, free resources |
-| `browser-cli ping` | Daemon health check |
-
-## Options
-
-| Flag | Effect |
-|------|--------|
-| `--browser chrome\|chromium` | Browser binary (default: chrome) |
-| `--max-steps N` | Max agent steps (default: 30) |
-| `--wait` | Block until task completes |
-| `--timeout N` | Wait timeout in seconds (0 = infinite) |
-| `--json` | Machine-readable output |
-| `--keep-open` | Auto-create session, keep tab open |
-| `--session <id>` | Bind to existing session |
-| `--tab <id>` | Target specific tab |
-| `--new-tab` | Open new tab in session |
-| `--follow-up` | Start from current browser state |
-
-## Session workflow
+Use the CLI to set variables securely (prompts for value — never appears in shell history):
 
 ```bash
-# Create session with Gmail open
-browser-cli run --keep-open "open gmail"
-
-# Check what tabs are open
-browser-cli state session auto-gmail-abc123
-# → Shows tab DEF456 "Inbox" active
-
-# User manually clicks an email...
-
-# Continue in same session (agent sees the email)
-browser-cli run --session auto-gmail-abc123 "summarize this email"
-
-# Close browser, session survives
-browser-cli state session auto-gmail-abc123
-# → Tab shows as "detached" with URL preserved
-
-# Continue after browser close (new Chrome spawns)
-browser-cli run --session auto-gmail-abc123 "search for sender's company"
+browser-cli set setenv MAX_PARALLEL_TASKS
+# → Value for MAX_PARALLEL_TASKS: [type value, press Enter]
+# → ✅ Set MAX_PARALLEL_TASKS in ~/.browserd/.env
+# → Restart browserd for changes to take effect: browser-cli daemon restart
 ```
 
-## Hermes Agent usage
+Or edit `~/.browserd/.env` directly:
 
 ```bash
-# Hermes calls browser-cli from terminal tool:
-browser-cli run --json --wait "go to google.com, find funding databases"
-# → {"id": "abc123", "result": "...", "urls": [...]}
-
-# Multi-step with state inspection:
-browser-cli state sessions --json
-browser-cli state session inbox --json  # find tab IDs
-browser-cli run --session inbox --tab DEF456 --json --wait "reply to this email"
+echo 'MAX_PARALLEL_TASKS=8' >> ~/.browserd/.env
 ```
 
-See `~/.hermes/skills/browser-cli/SKILL.md` for the full Hermes integration guide.
+## CLI Commands
 
-## Dependencies
+### Task Management
 
-- `browser-use` — git+https://github.com/browser-use/browser-use.git
-- `cdp-use>=1.4.5` — typed Chrome DevTools Protocol client
-- `aiohttp>=3.9` — async HTTP (health checks)
-- `pydantic>=2.0` — data validation
+```bash
+browser-cli run "your task prompt"          # Fire-and-forget
+browser-cli run "prompt" --keep-open         # Keep browser open (auto-creates session)
+browser-cli run --session <id> "prompt"     # Continue in existing session
+browser-cli run "prompt" --wait              # Wait for completion
+browser-cli run "prompt" --json              # JSON output
+
+browser-cli list                             # List all tasks
+browser-cli list --status running            # Filter by status
+
+browser-cli status <task-id>                 # Task details
+browser-cli result <task-id>                 # Task result output
+browser-cli logs <task-id>                   # Task logs (--tail N)
+browser-cli wait <task-id>                   # Wait for completion (--timeout N)
+
+browser-cli resume <task-id>                 # Resume blocked task
+browser-cli cancel <task-id>                 # Cancel task
+```
+
+### State Inspection
+
+```bash
+browser-cli state-system                     # Full overview (ports, sessions, tasks)
+browser-cli state-tasks                      # Running + queued tasks
+browser-cli state-sessions                   # All sessions with tab counts
+browser-cli state-session <session-id>       # Session detail with tabs
+browser-cli session-close <session-id>        # Close session
+```
+
+### Configuration
+
+```bash
+browser-cli set setenv <KEY>                 # Set env var (prompts for value)
+```
+
+### Service Control
+
+```bash
+browser-cli daemon restart                   # Restart browserd
+browser-cli daemon stop                      # Stop browserd
+browser-cli daemon start                     # Start browserd
+browser-cli daemon enable                    # Enable auto-start on boot
+browser-cli daemon disable                   # Disable auto-start
+browser-cli daemon status                    # Show service status
+```
+
+### Utility
+
+```bash
+browser-cli ping                             # Health check
+```
+
+## Development
+
+- Python >= 3.10, async/await
+- Pydantic v2 models, `from __future__ import annotations`
+- Heavy imports (browser_use) inside methods, not module top
+- `TYPE_CHECKING` guards for inter-module references
+
+```bash
+pip install -e .
+pytest
+```

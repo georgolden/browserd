@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -54,7 +55,10 @@ class DaemonConfig(BaseModel):
     chromium_path: Path = Field(default=Path("/usr/bin/chromium"))
     port_base: int = Field(default=9222, ge=1024, le=65535)
 
-    max_parallel: int = Field(default=4, ge=1, le=16)
+    max_parallel: int = Field(
+        default_factory=lambda: int(os.environ.get("MAX_PARALLEL_TASKS", "4")),
+        ge=1, le=16,
+    )
     default_max_steps: int = Field(default=30, ge=1)
     default_model: str = Field(default="deepseek-chat")
     step_timeout: int = Field(default=120, ge=10)
