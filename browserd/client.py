@@ -43,13 +43,15 @@ class BrowserClient:
                   keep_open: bool = False, close_tabs: bool = True,
                   max_steps: int = 30, session_id: str | None = None,
                   tab_target_id: str | None = None, new_tab: bool = False,
-                  follow_up_task: bool = False) -> dict:
+                  follow_up_task: bool = False,
+                  profile: str | None = None) -> dict:
         return await self.send({
             "cmd": "run", "prompt": prompt, "browser": browser,
             "keep_open": keep_open, "close_tabs": close_tabs,
             "max_steps": max_steps,
             "session_id": session_id, "tab_target_id": tab_target_id,
             "new_tab": new_tab, "follow_up_task": follow_up_task,
+            "profile": profile,
         })
 
     async def list_tasks(self, status_filter: str = "all") -> dict:
@@ -81,6 +83,17 @@ class BrowserClient:
 
     async def inject(self, task_id: str, prompt: str) -> dict:
         return await self.send({"cmd": "inject", "id": task_id, "prompt": prompt})
+
+    # ── Profile management ──────────────────────────────────────────────
+
+    async def profile_create(self, name: str, browser: str = "chrome") -> dict:
+        return await self.send({"cmd": "profile_create", "name": name, "browser": browser})
+
+    async def profile_list(self) -> dict:
+        return await self.send({"cmd": "profile_list"})
+
+    async def profile_delete(self, name: str) -> dict:
+        return await self.send({"cmd": "profile_delete", "name": name})
 
     async def logs(self, task_id: str, tail: int = 50) -> dict:
         return await self.send({"cmd": "logs", "id": task_id, "tail": tail})

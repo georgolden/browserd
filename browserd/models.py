@@ -42,6 +42,20 @@ class LogLevel(str, Enum):
     debug = "debug"
 
 
+# ── Profile model ────────────────────────────────────────────────────────────
+
+class ProfileRecord(BaseModel):
+    """A named, persistent Chrome profile with its own cookies and sessions."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str                         # unique, e.g. "work", "default"
+    browser: str = "chrome"           # "chrome" or "chromium"
+    data_dir: str                     # ~/.browserd/profiles/{name}/
+    status: str = "idle"             # idle | running
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
 # ── Daemon configuration ────────────────────────────────────────────────────
 class DaemonConfig(BaseModel):
     """Configuration for the browserd daemon."""
@@ -71,6 +85,14 @@ class DaemonConfig(BaseModel):
     default_model: str = Field(default="deepseek-chat")
     step_timeout: int = Field(default=120, ge=10)
     cdp_launch_timeout: int = Field(default=30, ge=5)
+
+    profiles_dir: Path = Field(
+        default_factory=lambda: Path(os.environ.get(
+            "BROWSERD_PROFILES_DIR",
+            str(Path.home() / ".browserd" / "profiles")
+        )),
+        description="Base directory for named browser profiles",
+    )
 
     deepseek_api_key: str | None = Field(default=None)
 
@@ -102,6 +124,7 @@ class TaskCreate(BaseModel):
     tab_target_id: str | None = Field(default=None, description="Target specific tab")
     new_tab: bool = Field(default=False, description="Open new tab in session")
     follow_up_task: bool = Field(default=False, description="Start from current browser state")
+    profile: str | None = Field(default=None, description="Named profile to use (defaults to 'default')")
 
 
 class TaskResult(BaseModel):
@@ -219,6 +242,7 @@ class SocketRequest(BaseModel):
     tab_target_id: str | None = None
     new_tab: bool | None = None
     follow_up_task: bool | None = None
+    profile: str | None = None
     filter: str | None = None
     timeout: int | None = None
     tail: int | None = None

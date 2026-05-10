@@ -39,9 +39,14 @@ class PortPool:
         for port in config.port_range:
             self.ports[port] = "free"
 
-    async def acquire(self, browser: str = "chrome", reuse: bool = False) -> tuple[int, str]:
-        """Get a free port with a fresh (or reused) browser. Returns (port, cdp_url)."""
-        _log(f"[POOL] acquire({browser}, reuse={reuse}) ENTER ports={list(self.ports.values())}")
+    async def acquire(self, browser: str = "chrome", reuse: bool = False,
+                      profile_data_dir: str | None = None) -> tuple[int, str]:
+        """Get a free port with a fresh (or reused) browser. Returns (port, cdp_url).
+
+        If profile_data_dir is provided, Chrome uses that as its user-data-dir
+        (persistent profile). Otherwise uses a temp dir (anonymous session).
+        """
+        _log(f"[POOL] acquire({browser}, reuse={reuse}, profile={profile_data_dir}) ENTER ports={list(self.ports.values())}")
 
         async with self._lock:
             free = [p for p, s in self.ports.items() if s == "free"]
@@ -63,7 +68,7 @@ class PortPool:
 
         # Launch fresh
         _log(f"[POOL] acquire LAUNCHING {browser} on port {port}")
-        await self._launch(port, browser)
+        await self._launch(port, browser, profile_data_dir=profile_data_dir)
         _log(f"[POOL] acquire DONE port={port}")
         return port, cdp_url
 
@@ -118,6 +123,9 @@ class PortPool:
         """Kill everything on this port — our subprocess AND any external Chrome."""
         _log(f"[POOL] _kill_port port={port}")
 
+        # 0. Try CDP Browser.close first (graceful — flushes cookies to disk)
+        await self._graceful_close(port)
+
         # 1. Kill our tracked process
         if port in self.procs:
             proc = self.procs.pop(port)
@@ -132,33 +140,93 @@ class PortPool:
                 except Exception:
                     pass
 
-        # 2. Kill ANY process on this port
+        # 2. Gracefully terminate ANY process on this port (gives Chrome time to flush)
         try:
+            # First, SIGTERM for graceful shutdown (cookies flush to disk)
+            proc = await asyncio.create_subprocess_exec(
+                "bash", "-c",
+                f"lsof -ti :{port} 2>/dev/null | xargs -r kill -TERM 2>/dev/null; true",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(proc.wait(), timeout=2)
+            await asyncio.sleep(2)  # give Chrome time to flush cookies/state
+            # Then SIGKILL any stragglers
             proc = await asyncio.create_subprocess_exec(
                 "bash", "-c",
                 f"lsof -ti :{port} 2>/dev/null | xargs -r kill -9 2>/dev/null; true",
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
-            await asyncio.wait_for(proc.wait(), timeout=3)
+            await asyncio.wait_for(proc.wait(), timeout=2)
         except Exception:
             pass
 
-        # 3. Also kill chrome processes with matching user-data-dir
+        # 3. Also kill chrome processes with matching user-data-dir (graceful first)
         try:
             proc = await asyncio.create_subprocess_exec(
                 "bash", "-c",
-                f"pkill -9 -f 'user-data-dir=/tmp/browserd-port{port}' 2>/dev/null; true",
+                f"pkill -TERM -f 'user-data-dir=.*browserd-port{port}' 2>/dev/null; "
+                f"pkill -TERM -f 'user-data-dir=.*browserd/profiles/' 2>/dev/null; "
+                f"sleep 2; "
+                f"pkill -9 -f 'user-data-dir=.*browserd-port{port}' 2>/dev/null; "
+                f"pkill -9 -f 'user-data-dir=.*browserd/profiles/' 2>/dev/null; true",
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
-            await asyncio.wait_for(proc.wait(), timeout=3)
+            await asyncio.wait_for(proc.wait(), timeout=5)
         except Exception:
             pass
 
         await asyncio.sleep(1)  # let OS release the port
 
-    async def _launch(self, port: int, browser: str) -> None:
+    async def _graceful_close(self, port: int) -> bool:
+        """Try to gracefully close Chrome via CDP Browser.close.
+
+        This gives Chrome time to flush cookies, localStorage, etc. to disk.
+        Returns True if CDP close succeeded, False if it failed.
+        """
+        import aiohttp
+        try:
+            # Connect to CDP and send Browser.close
+            ws_url = f"http://localhost:{port}/json/version"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(ws_url, timeout=aiohttp.ClientTimeout(total=3)) as r:
+                    if r.status != 200:
+                        return False
+                    data = await r.json()
+                    ws_endpoint = data.get("webSocketDebuggerUrl", "")
+
+                if not ws_endpoint:
+                    return False
+
+                # Connect via WebSocket and send Browser.close
+                async with session.ws_connect(
+                    ws_endpoint,
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as ws:
+                    # Send Browser.close command
+                    await ws.send_json({
+                        "id": 1,
+                        "method": "Browser.close",
+                    })
+                    # Wait for response
+                    try:
+                        resp = await asyncio.wait_for(ws.receive_json(), timeout=3)
+                        _log(f"[POOL] _graceful_close Browser.close response: {resp}")
+                    except asyncio.TimeoutError:
+                        pass  # Chrome may close before sending response
+
+            # Give Chrome time to flush
+            await asyncio.sleep(2)
+            _log(f"[POOL] _graceful_close succeeded on :{port}")
+            return True
+        except Exception as e:
+            _log(f"[POOL] _graceful_close failed on :{port}: {e}")
+            return False
+
+    async def _launch(self, port: int, browser: str,
+                       profile_data_dir: str | None = None) -> None:
         path = self.config.browser_path(browser)
         if not os.path.exists(path):
             if browser == "chrome" and os.path.exists(self.config.chromium_path):
@@ -167,10 +235,15 @@ class PortPool:
             else:
                 raise RuntimeError(f"Browser not found at {path}")
 
-        user_data_dir = f"/tmp/browserd-port{port}"
-        Path(user_data_dir).mkdir(parents=True, exist_ok=True)
+        if profile_data_dir:
+            user_data_dir = profile_data_dir
+            Path(user_data_dir).mkdir(parents=True, exist_ok=True)
+        else:
+            user_data_dir = f"/tmp/browserd-port{port}"
+            Path(user_data_dir).mkdir(parents=True, exist_ok=True)
 
-        _log(f"[POOL] _launch spawning {self.browser_kinds[port]} on :{port}")
+        _log(f"[POOL] _launch spawning {self.browser_kinds[port]} on :{port}"
+             f" profile={user_data_dir}")
         env = os.environ.copy()
         if not env.get("DISPLAY"):
             env["DISPLAY"] = ":0"  # default X display

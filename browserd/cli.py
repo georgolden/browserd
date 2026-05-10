@@ -49,6 +49,7 @@ async def cmd_run(client, args):
         tab_target_id=args.tab,
         new_tab=args.new_tab,
         follow_up_task=args.follow_up or bool(args.session),
+        profile=args.profile,
     )
     tid = resp["id"]
     sid = resp.get("session_id", "")
@@ -204,6 +205,31 @@ async def cmd_steps(client, args):
         else:
             print(f"\n── Step {step} @ {url} ── (no detail)")
 
+async def cmd_profile_create(client, args):
+    """Create a named browser profile."""
+    resp = await client.profile_create(args.name, args.browser)
+    if resp.get("type") == "error":
+        die(resp["message"])
+    p = resp["profile"]
+    print(f"Created profile '{p['name']}' ({p['browser']}) → {p['data_dir']}")
+
+async def cmd_profile_list(client, args):
+    """List all profiles."""
+    resp = await client.profile_list()
+    profiles = resp.get("profiles", [])
+    if not profiles:
+        print("No profiles. Run 'browser-cli profile-create <name>' to create one.")
+        return
+    for p in profiles:
+        icon = "🟢" if p["status"] == "idle" else "🔵"
+        print(f"  {icon} {p['name']:20s} {p['browser']:10s} created {p['created_at'][:10]}")
+
+async def cmd_profile_delete(client, args):
+    """Delete a profile (cannot delete default)."""
+    resp = await client.profile_delete(args.name)
+    if resp.get("type") == "error":
+        die(resp["message"])
+    print(f"Deleted profile '{args.name}'")
 async def cmd_logs(client, args):
     resp = await client.logs(args.id, args.tail)
     for e in resp.get("logs", []):
@@ -490,6 +516,8 @@ def build_parser():
     sub.add_argument("--timeout", "-t", type=int, default=0)
     sub.add_argument("--json", "-j", action="store_true")
 
+    sub.add_argument("--profile", "-P", default=None, help='Named profile (default: "default")')
+
     # list
     ls = s.add_parser("list", aliases=["ls"])
     ls.add_argument("--status", "-s", choices=["queued","running","blocked","done","failed","cancelled"])
@@ -528,6 +556,13 @@ def build_parser():
     inj.add_argument("id")
     inj.add_argument("prompt")
 
+    # profile subcommands
+    pc = s.add_parser("profile-create", help="Create a named browser profile")
+    pc.add_argument("name")
+    pc.add_argument("--browser", "-b", choices=["chrome", "chromium"], default="chrome")
+    s.add_parser("profile-list", aliases=["profiles"], help="List all profiles")
+    pd = s.add_parser("profile-delete", help="Delete a profile (cannot delete default)")
+    pd.add_argument("name")
     # logs
     lg = s.add_parser("logs", aliases=["log"]); lg.add_argument("id")
     lg.add_argument("--tail", "-n", type=int, default=50)
@@ -611,6 +646,9 @@ def main():
         "state-session": "cmd_state_session", "st-si": "cmd_state_session", "session-info": "cmd_state_session",
         "state-system": "cmd_state_system", "st-sy": "cmd_state_system", "sys": "cmd_state_system",
         "session-close": "cmd_session_close", "sc": "cmd_session_close",
+        "profile-create": "cmd_profile_create",
+        "profile-list": "cmd_profile_list", "profiles": "cmd_profile_list",
+        "profile-delete": "cmd_profile_delete",
         "ping": "cmd_ping", "p": "cmd_ping",
     }
     fn = globals().get(handlers.get(args.cmd, ""))

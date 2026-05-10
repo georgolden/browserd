@@ -107,6 +107,8 @@ class TaskManager:
         self.running: dict[str, asyncio.Task] = {}
         self._agents: dict[str, Any] = {}   # agent refs for pause/inject
         self.semaphore = asyncio.Semaphore(config.max_parallel)
+        from browserd.profile_manager import ProfileManager
+        self.profiles = ProfileManager(db, config)
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -116,7 +118,8 @@ class TaskManager:
                   session_id: str | None = None,
                   tab_target_id: str | None = None,
                   new_tab: bool = False,
-                  follow_up_task: bool = False) -> str:
+                  follow_up_task: bool = False,
+                  profile: str | None = None) -> str:
         """Run a task — unified entry point for all task variants.
 
         Args:
@@ -130,6 +133,7 @@ class TaskManager:
             tab_target_id: Target a specific tab in the session.
             new_tab: Open a new tab in the session instead of reusing.
             follow_up_task: Start from current browser state (no auto-navigate).
+            profile: Named profile to use (None = 'default').
         """
         task_id = uuid.uuid4().hex[:12]
 
@@ -159,6 +163,7 @@ class TaskManager:
             "new_tab": new_tab,
             "follow_up_task": follow_up_task,
             "browser": browser,
+            "profile": profile,
         }
 
         await self._dequeue()
@@ -385,6 +390,11 @@ class TaskManager:
         new_tab = extras.get("new_tab", False)
         follow_up = extras.get("follow_up_task", False) or bool(session_id)
         browser_kind = extras.get("browser", t.get("browser", "chrome"))
+        profile_name = extras.get("profile")
+
+        # Resolve profile → data_dir (None → 'default')
+        profile_data_dir = self.profiles.resolve(profile_name)
+        resolved_profile = profile_name or "default"
 
         # State reconciliation before running (moved to periodic daemon loop)
         # await self._reconcile_state()  # REMOVED — races with concurrent port acquisition
@@ -393,11 +403,12 @@ class TaskManager:
         try:
             reuse = bool(session_id)  # reuse browser for session continuations
             print(f"[TASK] {task_id[:8]} acquiring port (reuse={reuse}) at {self._now()[11:19]}", flush=True)
-            port, cdp_url = await self.pool.acquire(browser_kind, reuse=reuse)
+            port, cdp_url = await self.pool.acquire(browser_kind, reuse=reuse, profile_data_dir=profile_data_dir)
             print(f"[TASK] {task_id[:8]} got port {port} at {self._now()[11:19]}", flush=True)
             self.db.update_task(task_id, status="running", port=port, started_at=self._now())
             self.db.add_log(task_id, 0, "info",
                           f"Started ({browser_kind} on :{port}): {t['prompt'][:100]}")
+            self.profiles.set_running(resolved_profile)
         except RuntimeError as e:
             self.db.update_task(task_id, status="failed", error=str(e), started_at=None)
             self.db.add_log(task_id, None, "error", f"Failed to acquire port: {e}")
@@ -725,7 +736,32 @@ class TaskManager:
             self.db.add_log(task_id, None, "error", f"Task {st}: {msg}")
             await self._close_tabs(session, created_targets, session_id)
         finally:
-            # Stop browser session (doesn't kill Chrome, just disconnects CDP)
+            # Gracefully close Chrome via CDP (flushes cookies to disk)
+            if session and port:
+                try:
+                    import aiohttp
+                    async with aiohttp.ClientSession() as http:
+                        async with http.get(
+                            f"http://localhost:{port}/json/version",
+                            timeout=aiohttp.ClientTimeout(total=3),
+                        ) as r:
+                            ver = await r.json()
+                            ws_url = ver.get("webSocketDebuggerUrl", "")
+                        if ws_url:
+                            async with http.ws_connect(
+                                ws_url,
+                                timeout=aiohttp.ClientTimeout(total=5),
+                            ) as ws:
+                                await ws.send_json({"id": 1, "method": "Browser.close"})
+                                try:
+                                    await asyncio.wait_for(ws.receive_json(), timeout=3)
+                                except asyncio.TimeoutError:
+                                    pass
+                    await asyncio.sleep(2)  # give Chrome time to flush
+                except Exception:
+                    pass
+
+            # Stop browser session (disconnects CDP)
             if session:
                 try:
                     await session.stop()
@@ -756,6 +792,7 @@ class TaskManager:
             if task_id in self.running:
                 del self.running[task_id]
             self._agents.pop(task_id, None)
+            self.profiles.set_idle(resolved_profile)
             await self._dequeue()
 
     async def _close_tabs(self, session: Browser | None, target_ids: list[str],

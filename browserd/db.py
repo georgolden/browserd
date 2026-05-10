@@ -88,7 +88,14 @@ class TaskDB:
             CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
             CREATE INDEX IF NOT EXISTS idx_tabs_session ON session_tabs(session_id);
             CREATE INDEX IF NOT EXISTS idx_sessions_port ON sessions(browser_port);
-        """)
+            CREATE TABLE IF NOT EXISTS profiles (
+                name        TEXT PRIMARY KEY,
+                browser     TEXT NOT NULL DEFAULT 'chrome',
+                data_dir    TEXT NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'idle',
+                created_at  TEXT NOT NULL
+            );
+        """);
         self._conn.commit()
 
     # ── Tasks CRUD ──────────────────────────────────────────────────────────
@@ -257,6 +264,37 @@ class TaskDB:
             "UPDATE session_tabs SET status='detached' WHERE port=? AND status='active'",
             (port,),
         )
+        self._conn.commit()
+
+    # ── Profiles CRUD ───────────────────────────────────────────────────────
+
+    def create_profile(self, name: str, browser: str, data_dir: str) -> None:
+        self._conn.execute(
+            "INSERT INTO profiles (name, browser, data_dir, status, created_at) VALUES (?,?,?,?,?)",
+            (name, browser, data_dir, "idle", now()),
+        )
+        self._conn.commit()
+
+    def get_profile(self, name: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT * FROM profiles WHERE name=?", (name,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def list_profiles(self) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT * FROM profiles ORDER BY created_at"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def update_profile_status(self, name: str, status: str) -> None:
+        self._conn.execute(
+            "UPDATE profiles SET status=? WHERE name=?", (status, name)
+        )
+        self._conn.commit()
+
+    def delete_profile(self, name: str) -> None:
+        self._conn.execute("DELETE FROM profiles WHERE name=?", (name,))
         self._conn.commit()
 
     def close(self) -> None:

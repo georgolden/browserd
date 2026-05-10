@@ -95,6 +95,7 @@ class DaemonServer:
                 tab_target_id=cmd.get("tab_target_id"),
                 new_tab=cmd.get("new_tab", False),
                 follow_up_task=cmd.get("follow_up_task", False),
+                profile=cmd.get("profile"),
             )
             return {
                 "type": "submitted",
@@ -215,6 +216,28 @@ class DaemonServer:
                 "message": f"Session '{sid}' closed" if ok else f"Session '{sid}' not found",
             }
 
+        elif action == "profile_create":
+            name = cmd.get("name", "")
+            browser = cmd.get("browser", "chrome")
+            try:
+                p = await self.manager.profiles.create(name, browser)
+                return {"type": "profile_created", "profile": p.model_dump()}
+            except ValueError as e:
+                return {"type": "error", "message": str(e)}
+
+        elif action == "profile_list":
+            profiles = self.manager.profiles.list()
+            return {"type": "profile_list", "profiles": [p.model_dump() for p in profiles]}
+
+        elif action == "profile_delete":
+            name = cmd.get("name", "")
+            try:
+                await self.manager.profiles.delete(name)
+                return {"type": "profile_deleted", "name": name}
+            except ValueError as e:
+                return {"type": "error", "message": str(e)}
+
+
         else:
             return {"type": "error", "message": f"Unknown command: {action}"}
 
@@ -263,6 +286,7 @@ async def _main_async() -> None:
     )
     db = TaskDB(config.db_path)
     manager = TaskManager(db, config)
+    await manager.profiles.ensure_default()
     server = DaemonServer(manager, config)
 
     loop = asyncio.get_event_loop()
