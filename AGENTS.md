@@ -75,20 +75,22 @@ Port is NOT released when:
 
 ## Use cases (tested)
 
-| UC | Command | Expected |
-|----|---------|----------|
-| UC-01 | `run "prompt"` | Tab closes, port freed |
-| UC-02 | `run --keep-open "prompt"` | Session auto-created, tab stays |
-| UC-03 | `run --session <id> "prompt"` | Agent starts from active tab |
-| UC-04 | Session after browser kill | New Chrome spawns, navigates to saved URL |
-| UC-05 | Two `run` simultaneously | Two Chromes on different ports |
-| UC-06 | 5 tasks on 4-port pool | 5th queues, runs when port freed |
-| UC-07 | `resume <blocked_id>` | Re-runs task, activates existing tab |
-| UC-08 | `cancel <id>` | Task cancelled, port freed |
-| UC-09 | `pause <id>` | Agent freezes mid-step, browser stays open |
-| UC-10 | `resume-agent <id>` | Unfreezes agent, continues from current state |
-| UC-11 | `inject <id> "prompt"` | Replaces task mid-execution, auto-resumes |
-| UC-12 | Auto-pause on login | Agent detects auth URLs, pauses after 2 hits |
+| UC | Command | Expected | Status |
+|----|---------|----------|--------|
+| UC-01 | `run "prompt"` | Tab closes, port freed | ✅ |
+| UC-02 | `run --keep-open "prompt"` | Session auto-created, tab stays | ✅ |
+| UC-03 | `run --session <id> "prompt"` | Agent starts from active tab | ✅ |
+| UC-04 | Session after browser kill | New Chrome spawns, navigates to saved URL | ⚠️ |
+| UC-05 | Two `run` simultaneously | Two Chromes on different ports | ✅ |
+| UC-06 | 5 tasks on 4-port pool | 5th queues, runs when port freed | ⚠️ |
+| UC-07 | `resume <blocked_id>` | Re-runs task, activates existing tab | ⚠️ |
+| UC-08 | `cancel <id>` | Task cancelled, port freed | ✅ |
+| UC-09 | `pause <id>` | Agent freezes mid-step, browser stays open | ✅ |
+| UC-10 | `resume-agent <id>` | Unfreezes agent, continues from current state | ✅ |
+| UC-11 | `inject <id> "prompt"` | Replaces task mid-execution, auto-resumes | ✅ |
+| UC-12 | Auto-pause on login | Agent detects auth URLs, pauses after 2 hits | ⚠️ |
+| UC-13 | `run --profile <name>` | Cookies persist across separate Chrome launches | ✅ |
+| UC-14 | `profile create/list/delete` | Full lifecycle: create, list, use, delete, default auto-create | ✅ |
 
 ## Setup
 
