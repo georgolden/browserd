@@ -153,6 +153,27 @@ async def cmd_cancel(client, args):
     print(f"Cancelled: {args.id}")
 
 
+async def cmd_pause(client, args):
+    resp = await client.pause(args.id)
+    if resp.get("type") == "error":
+        die(resp["message"])
+    print(f"Paused: {args.id} - browser stays open. Log in, then: browser-cli resume-agent {args.id}")
+
+
+async def cmd_resume_agent(client, args):
+    resp = await client.resume_agent(args.id)
+    if resp.get("type") == "error":
+        die(resp["message"])
+    print(f"Resumed: {args.id}")
+
+
+async def cmd_inject(client, args):
+    resp = await client.inject(args.id, args.prompt)
+    if resp.get("type") == "error":
+        die(resp["message"])
+    print(f"Injected: {args.id} - agent continuing with new prompt")
+
+
 async def cmd_steps(client, args):
     """Show agent step data — thinking, actions, page state for real-time awareness."""
     resp = await client.steps(args.id, args.tail)
@@ -496,6 +517,17 @@ def build_parser():
     # cancel
     s.add_parser("cancel", aliases=["kill", "stop"]).add_argument("id")
 
+    # pause
+    s.add_parser("pause", aliases=["freeze"]).add_argument("id")
+
+    # resume-agent (unpause)
+    s.add_parser("resume-agent", aliases=["unpause", "ra"]).add_argument("id")
+
+    # inject — modify prompt mid-execution
+    inj = s.add_parser("inject", aliases=["correct"], help="Inject a corrected prompt into a running/paused agent")
+    inj.add_argument("id")
+    inj.add_argument("prompt")
+
     # logs
     lg = s.add_parser("logs", aliases=["log"]); lg.add_argument("id")
     lg.add_argument("--tail", "-n", type=int, default=50)
@@ -569,6 +601,9 @@ def main():
         "wait": "cmd_wait", "w": "cmd_wait",
         "resume": "cmd_resume", "unblock": "cmd_resume",
         "cancel": "cmd_cancel", "kill": "cmd_cancel", "stop": "cmd_cancel",
+        "pause": "cmd_pause", "freeze": "cmd_pause",
+        "resume-agent": "cmd_resume_agent", "unpause": "cmd_resume_agent", "ra": "cmd_resume_agent",
+        "inject": "cmd_inject", "correct": "cmd_inject",
         "logs": "cmd_logs", "log": "cmd_logs",
         "steps": "cmd_steps", "step": "cmd_steps",
         "state-tasks": "cmd_state_tasks", "st-t": "cmd_state_tasks",

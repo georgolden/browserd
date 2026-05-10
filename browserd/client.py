@@ -73,6 +73,15 @@ class BrowserClient:
     async def cancel(self, task_id: str) -> dict:
         return await self.send({"cmd": "cancel", "id": task_id})
 
+    async def pause(self, task_id: str) -> dict:
+        return await self.send({"cmd": "pause", "id": task_id})
+
+    async def resume_agent(self, task_id: str) -> dict:
+        return await self.send({"cmd": "resume_agent", "id": task_id})
+
+    async def inject(self, task_id: str, prompt: str) -> dict:
+        return await self.send({"cmd": "inject", "id": task_id, "prompt": prompt})
+
     async def logs(self, task_id: str, tail: int = 50) -> dict:
         return await self.send({"cmd": "logs", "id": task_id, "tail": tail})
 

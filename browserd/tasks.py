@@ -105,6 +105,7 @@ class TaskManager:
         self.config = config
         self.pool = PortPool(config)
         self.running: dict[str, asyncio.Task] = {}
+        self._agents: dict[str, Any] = {}   # agent refs for pause/inject
         self.semaphore = asyncio.Semaphore(config.max_parallel)
 
     # ── Public API ──────────────────────────────────────────────────────────
@@ -194,6 +195,41 @@ class TaskManager:
                 self.pool.release(port)
             return True
         return False
+
+    async def pause(self, task_id: str) -> bool:
+        """Pause a running agent — freezes mid-step, browser stays open."""
+        agent = self._agents.get(task_id)
+        if agent is None:
+            return False
+        if agent.state.paused:
+            return True  # already paused
+        agent.pause()
+        self.db.add_log(task_id, None, "warn", "Agent paused — waiting for user to log in")
+        return True
+
+    async def resume_agent(self, task_id: str) -> bool:
+        """Resume a paused agent — continues from current browser state."""
+        agent = self._agents.get(task_id)
+        if agent is None:
+            return False
+        if not agent.state.paused:
+            return True  # already running
+        agent.resume()
+        self.db.add_log(task_id, None, "info", "Agent resumed by user")
+        return True
+
+    async def inject(self, task_id: str, new_prompt: str) -> bool:
+        """Inject a corrected/follow-up prompt into a paused or running agent.
+        
+        Calls agent.add_new_task() which resets paused state and continues.
+        """
+        agent = self._agents.get(task_id)
+        if agent is None:
+            return False
+        agent.add_new_task(new_prompt)
+        self.db.add_log(task_id, None, "info", f"Prompt injected: {new_prompt[:120]}")
+        self.db.update_task(task_id, prompt=f"{self.db.get_task(task_id)['prompt']} | CORRECTION: {new_prompt}")
+        return True
 
     async def shutdown(self) -> None:
         """Cancel all running tasks, kill all browsers."""
@@ -499,6 +535,12 @@ class TaskManager:
                 step_state["url"] = url
                 if url and any(p in url.lower() for p in AUTH_PATTERNS):
                     step_state["login_hits"] += 1
+                    if step_state["login_hits"] >= 2 and task_id in self._agents:
+                        self._agents[task_id].pause()
+                        self.db.add_log(task_id, step, "warn",
+                                        f"Auto-paused: login wall at {url[:120]}")
+                        self.db.update_task(task_id, blocked_reason=f"Login wall — paused at {url[:120]}")
+                        print(f"[PAUSE] {task_id[:8]} Login wall detected, agent paused for manual login", flush=True)
 
                 # ── Loop detection ──
                 history = step_state["url_history"]
@@ -565,6 +607,7 @@ class TaskManager:
                 register_new_step_callback=on_step,
                 directly_open_url=not follow_up,
             )
+            self._agents[task_id] = agent
 
             history = await agent.run(max_steps=t["max_steps"])
 
@@ -712,6 +755,7 @@ class TaskManager:
 
             if task_id in self.running:
                 del self.running[task_id]
+            self._agents.pop(task_id, None)
             await self._dequeue()
 
     async def _close_tabs(self, session: Browser | None, target_ids: list[str],

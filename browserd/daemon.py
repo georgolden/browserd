@@ -138,6 +138,33 @@ class DaemonServer:
                 "message": "Cancelled" if ok else "Not cancellable",
             }
 
+        elif action == "pause":
+            ok = await self.manager.pause(tid or "")
+            return {
+                "type": "paused" if ok else "error",
+                "id": tid,
+                "message": "Agent paused - browser stays open" if ok else "Agent not found or already done",
+            }
+
+        elif action == "resume_agent":
+            ok = await self.manager.resume_agent(tid or "")
+            return {
+                "type": "resumed_agent" if ok else "error",
+                "id": tid,
+                "message": "Agent resumed" if ok else "Agent not paused or not found",
+            }
+
+        elif action == "inject":
+            new_prompt = cmd.get("prompt", "")
+            if not new_prompt:
+                return {"type": "error", "id": tid, "message": "No prompt provided"}
+            ok = await self.manager.inject(tid or "", new_prompt)
+            return {
+                "type": "injected" if ok else "error",
+                "id": tid,
+                "message": "Prompt injected and agent continuing" if ok else "Agent not found",
+            }
+
         elif action == "logs":
             logs = self.manager.db.get_logs(tid or "", tail=cmd.get("tail", 50))
             return {"type": "task_logs", "id": tid, "logs": logs}
