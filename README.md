@@ -10,7 +10,7 @@ BrowserD runs as a background service. AI agents (or any client) send tasks over
 - **Persistent sessions** — keep a browser alive across multiple tasks. Agents can start a session, run several follow-up tasks, and close it when done.
 - **Crash recovery** — if Chrome dies, the session remembers which tabs were open and restores them automatically.
 - **Task queuing** — submitting 10 tasks when only 4 ports are available? No problem — the extras queue up and run when a port frees.
-- **Simple CLI** — designed for both humans and agents. Every command has JSON output mode so agent toolchains can parse responses.\n- **Human-in-the-loop** — pause agents mid-execution, inject corrected prompts, auto-pause on login walls. Browser stays open while you intervene manually.
+- **Simple CLI** — designed for both humans and agents. Every command has JSON output mode so agent toolchains can parse responses.\\n- **Human-in-the-loop** — pause agents mid-execution, inject corrected prompts, auto-pause on login walls. Browser stays open while you intervene manually.\n- **Always-on sessions** (v2.1.0+) — browser NEVER auto-closes. Sessions persist until you explicitly close them. Login once, stay logged in across tasks.
 
 ## Quick Start
 
@@ -89,11 +89,11 @@ echo 'MAX_PARALLEL_TASKS=8' >> ~/.browserd/.env
 ### Running tasks
 
 ```bash
-browser-cli run "find the top HN post today"      # Fire-and-forget
-browser-cli run "log in to my account" --keep-open  # Keep browser open (creates session)
+browser-cli run "find the top HN post today"      # Fire-and-forget (browser stays open)
 browser-cli run --session <id> "do next thing"      # Continue in existing session
 browser-cli run "scrape products" --wait             # Wait for result before returning
 browser-cli run "scrape products" --json             # JSON output for agent consumption
+browser-cli session-close <id>                       # Explicitly close session & free port
 ```
 
 ### Managing tasks

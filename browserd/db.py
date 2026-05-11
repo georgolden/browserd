@@ -42,7 +42,7 @@ class TaskDB:
                 id              TEXT PRIMARY KEY,
                 prompt          TEXT NOT NULL,
                 browser         TEXT DEFAULT 'chrome',
-                close_tabs      INTEGER DEFAULT 1,
+                close_tabs      INTEGER DEFAULT 0,
                 status          TEXT DEFAULT 'queued',
                 max_steps       INTEGER DEFAULT 30,
                 model           TEXT DEFAULT 'deepseek-chat',
@@ -100,14 +100,14 @@ class TaskDB:
 
     # ── Tasks CRUD ──────────────────────────────────────────────────────────
     def create_task(self, task_id: str, prompt: str, browser: str = "chrome",
-                    close_tabs: bool = True, max_steps: int = 30,
+                    max_steps: int = 30,
                     model: str = "deepseek-chat", session_id: str | None = None) -> None:
         ts = now()
         self._conn.execute(
-            """INSERT INTO tasks (id, prompt, browser, close_tabs, status,
+            """INSERT INTO tasks (id, prompt, browser, status,
                max_steps, model, session_id, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (task_id, prompt, browser, int(close_tabs), "queued", max_steps, model, session_id, ts, ts),
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (task_id, prompt, browser, "queued", max_steps, model, session_id, ts, ts),
         )
         self._conn.commit()
 
@@ -123,7 +123,7 @@ class TaskDB:
         return dict(row) if row else None
 
     def list_tasks(self, status_filter: str = "all") -> list[dict]:
-        q = """SELECT id, prompt, browser, close_tabs, status, max_steps,
+        q = """SELECT id, prompt, browser, status, max_steps,
                session_id, created_at, step_count, current_url, error, blocked_reason
                FROM tasks"""
         if status_filter != "all":

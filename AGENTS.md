@@ -36,7 +36,7 @@ browser-cli run "prompt"
   → asyncio.Semaphore.acquire() → _run_task()
   → PortPool.acquire() → spawn Chrome → Browser(cdp_url)
   → Agent(task, llm, browser) → agent.run()
-  → result → session update → port release (unless blocked/keep_open)
+  → result → session update → port held (released only by explicit session-close)
 ```
 
 ## Development rules
@@ -66,31 +66,32 @@ blocked > done > failed
 ```
 Blocked takes priority because it determines whether a port is held for resume.
 
-### Port release rules
+### Port release rules (v2.1.0+)
 
-Port is NOT released when:
-- `task_status == "blocked"` (user may resume)
-- `keep_open == True` (session persists)
-- `has_active` tabs exist in the session
+Ports are **never auto-released**. Browser always stays alive after every task.
+Port is released ONLY by:
+- Explicit `browser-cli session-close <id>`
+- `browser-cli cancel <id>` on queued (not yet started) tasks
+- Daemon shutdown (`browser-cli daemon stop`)
 
 ## Use cases (tested)
 
 | UC | Command | Expected | Status |
 |----|---------|----------|--------|
-| UC-01 | `run "prompt"` | Tab closes, port freed | ✅ |
-| UC-02 | `run --keep-open "prompt"` | Session auto-created, tab stays | ✅ |
-| UC-03 | `run --session <id> "prompt"` | Agent starts from active tab | ✅ |
-| UC-04 | Session after browser kill | New Chrome spawns, navigates to saved URL | ⚠️ |
-| UC-05 | Two `run` simultaneously | Two Chromes on different ports | ✅ |
-| UC-06 | 5 tasks on 4-port pool | 5th queues, runs when port freed | ⚠️ |
-| UC-07 | `resume <blocked_id>` | Re-runs task, activates existing tab | ⚠️ |
-| UC-08 | `cancel <id>` | Task cancelled, port freed | ✅ |
-| UC-09 | `pause <id>` | Agent freezes mid-step, browser stays open | ✅ |
-| UC-10 | `resume-agent <id>` | Unfreezes agent, continues from current state | ✅ |
-| UC-11 | `inject <id> "prompt"` | Replaces task mid-execution, auto-resumes | ✅ |
-| UC-12 | Auto-pause on login | Agent detects auth URLs, pauses after 2 hits | ⚠️ |
-| UC-13 | `run --profile <name>` | Cookies persist across separate Chrome launches | ✅ |
-| UC-14 | `profile create/list/delete` | Full lifecycle: create, list, use, delete, default auto-create | ✅ |
+| UC-01 | `run "prompt"` | Browser stays open, session auto-created | ✅ |
+| UC-02 | `run --session <id> "prompt"` | Agent starts from active tab | ✅ |
+| UC-03 | Session after browser kill | New Chrome spawns, navigates to saved URL | ⚠️ |
+| UC-04 | Two `run` simultaneously | Two Chromes on different ports | ✅ |
+| UC-05 | 5 tasks on 4-port pool | 5th queues, runs when port freed | ⚠️ |
+| UC-06 | `resume <blocked_id>` | Re-runs task, activates existing tab | ⚠️ |
+| UC-07 | `cancel <id>` | Task cancelled, port freed | ✅ |
+| UC-08 | `pause <id>` | Agent freezes mid-step, browser stays open | ✅ |
+| UC-09 | `resume-agent <id>` | Unfreezes agent, continues from current state | ✅ |
+| UC-10 | `inject <id> "prompt"` | Replaces task mid-execution, auto-resumes | ✅ |
+| UC-11 | Auto-pause on login | Agent detects auth URLs, pauses after 2 hits | ⚠️ |
+| UC-12 | `run --profile <name>` | Cookies persist across separate Chrome launches | ✅ |
+| UC-13 | `profile create/list/delete` | Full lifecycle: create, list, use, delete, default auto-create | ✅ |
+| UC-14 | `session-close <id>` | Session closed, port released, Chrome killed | ✅ |
 
 ## Setup
 

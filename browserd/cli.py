@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""browser-cli v2.0.0 — control browserd daemon."""
+"""browser-cli v2.1.0 — control browserd daemon."""
 
 import argparse
 import asyncio
@@ -42,8 +42,6 @@ async def cmd_run(client, args):
     resp = await client.run(
         prompt=args.prompt,
         browser=args.browser,
-        keep_open=args.keep_open,
-        close_tabs=not args.keep_open,
         max_steps=args.max_steps,
         session_id=args.session,
         tab_target_id=args.tab,
@@ -500,13 +498,12 @@ async def cmd_session_close(client, args):
 def build_parser():
     p = argparse.ArgumentParser(prog="browser-cli", description="Control browserd daemon v2",
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--version", action="version", version="browser-cli 2.0.0")
+    p.add_argument("--version", action="version", version="browser-cli 2.1.0")
     s = p.add_subparsers(dest="cmd")
 
     # run
     sub = s.add_parser("run", aliases=["r"]); sub.add_argument("prompt")
     sub.add_argument("--browser", "-b", choices=["chrome", "chromium"], default="chrome")
-    sub.add_argument("--keep-open", "-k", action="store_true")
     sub.add_argument("--session", "-s", default=None, help="Session ID")
     sub.add_argument("--tab", default=None, help="Target tab ID")
     sub.add_argument("--new-tab", action="store_true")

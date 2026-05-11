@@ -40,14 +40,12 @@ class BrowserClient:
         return await self.send({"cmd": "ping"}, timeout=5)
 
     async def run(self, prompt: str, browser: str = "chrome",
-                  keep_open: bool = False, close_tabs: bool = True,
                   max_steps: int = 30, session_id: str | None = None,
                   tab_target_id: str | None = None, new_tab: bool = False,
                   follow_up_task: bool = False,
                   profile: str | None = None) -> dict:
         return await self.send({
             "cmd": "run", "prompt": prompt, "browser": browser,
-            "keep_open": keep_open, "close_tabs": close_tabs,
             "max_steps": max_steps,
             "session_id": session_id, "tab_target_id": tab_target_id,
             "new_tab": new_tab, "follow_up_task": follow_up_task,

@@ -113,7 +113,6 @@ class TaskManager:
     # ── Public API ──────────────────────────────────────────────────────────
 
     async def run(self, prompt: str, browser: str = "chrome",
-                  keep_open: bool = False, close_tabs: bool = True,
                   max_steps: int = 30, model: str = "deepseek-chat",
                   session_id: str | None = None,
                   tab_target_id: str | None = None,
@@ -125,11 +124,9 @@ class TaskManager:
         Args:
             prompt: The task instruction.
             browser: "chrome" or "chromium" — which binary to use.
-            keep_open: Keep tab open after task; auto-creates session.
-            close_tabs: Close tab after task (unless keep_open overrides).
             max_steps: Maximum agent steps.
             model: LLM model name.
-            session_id: Bind to existing session (None = new or auto-create).
+            session_id: Bind to existing session (None = auto-create).
             tab_target_id: Target a specific tab in the session.
             new_tab: Open a new tab in the session instead of reusing.
             follow_up_task: Start from current browser state (no auto-navigate).
@@ -137,19 +134,15 @@ class TaskManager:
         """
         task_id = uuid.uuid4().hex[:12]
 
-        # Resolve session
+        # Resolve session — always auto-create if no explicit session
         actual_session_id = session_id
-        if keep_open and not actual_session_id:
-            # Auto-create session from task prompt
+        if not actual_session_id:
             actual_session_id = f"auto-{prompt[:20].replace(' ', '-').lower()}-{task_id[:6]}"
             self.db.create_session(actual_session_id)
             self.db.add_log(task_id, None, "info", f"Auto-created session: {actual_session_id}")
 
-        is_keep_open = keep_open
-        is_close_tabs = close_tabs if not keep_open else False
-
         self.db.create_task(
-            task_id, prompt, browser, is_close_tabs, max_steps, model,
+            task_id, prompt, browser, max_steps, model,
             session_id=actual_session_id,
         )
         self.db.add_log(task_id, None, "info", f"Queued: {prompt[:100]}")
@@ -157,7 +150,6 @@ class TaskManager:
         # Store extra params in task record for runner
         self._task_extras: dict[str, dict] = getattr(self, '_task_extras', {})
         self._task_extras[task_id] = {
-            "keep_open": keep_open,
             "session_id": actual_session_id,
             "tab_target_id": tab_target_id,
             "new_tab": new_tab,
@@ -180,7 +172,7 @@ class TaskManager:
         return True
 
     async def cancel(self, task_id: str) -> bool:
-        """Cancel a task. Closes tab if close_tabs. Frees port."""
+        """Cancel a task. Marks as cancelled and frees port via session_close."""
         t = self.db.get_task(task_id)
         if not t:
             return False
@@ -384,7 +376,6 @@ class TaskManager:
             self.db.update_task(task_id, status="running")
 
         extras = getattr(self, '_task_extras', {}).pop(task_id, {})
-        keep_open = extras.get("keep_open", False)
         session_id = extras.get("session_id") or t.get("session_id")
         tab_target_id = extras.get("tab_target_id")
         new_tab = extras.get("new_tab", False)
@@ -698,22 +689,13 @@ class TaskManager:
                 except Exception:
                     pass
 
-            # ── Cleanup ──
-            if t["close_tabs"] and not blocked:
-                if session_id:
-                    # Session task: close only tracked tabs
-                    await self._close_tabs(session, created_targets, session_id)
-                else:
-                    # No session: close ALL page tabs on this browser
-                    await self._close_all_tabs(session, port)
-                # Also close leftover about:blank tabs from agent startup
-                await self._close_blank_tabs(session, port)
-            elif keep_open and not blocked:
+            # ── Cleanup: browser always stays open ──
+            if blocked:
                 self.db.add_log(task_id, None, "info",
-                              f"Tab kept open in session {session_id}")
-            elif blocked:
+                              f"Task blocked — browser stays open. Resume: browser-cli resume {task_id}")
+            else:
                 self.db.add_log(task_id, None, "info",
-                              f"Tab kept open — resolve then: browser-cli resume {task_id}")
+                              f"Task done — browser stays open in session {session_id}")
 
             self.db.add_log(
                 task_id, steps,
@@ -723,8 +705,7 @@ class TaskManager:
 
         except asyncio.CancelledError:
             self.db.update_task(task_id, status="cancelled", finished_at=self._now())
-            self.db.add_log(task_id, None, "info", "Task cancelled by user")
-            await self._close_tabs(session, created_targets, session_id)
+            self.db.add_log(task_id, None, "info", "Task cancelled — browser stays open")
         except Exception as e:
             msg = str(e)
             st = (
@@ -733,61 +714,17 @@ class TaskManager:
                 else "failed"
             )
             self.db.update_task(task_id, status=st, finished_at=self._now(), error=msg)
-            self.db.add_log(task_id, None, "error", f"Task {st}: {msg}")
-            await self._close_tabs(session, created_targets, session_id)
+            self.db.add_log(task_id, None, "error", f"Task {st} — browser stays open: {msg}")
         finally:
-            # Gracefully close Chrome via CDP (flushes cookies to disk)
-            if session and port:
-                try:
-                    import aiohttp
-                    async with aiohttp.ClientSession() as http:
-                        async with http.get(
-                            f"http://localhost:{port}/json/version",
-                            timeout=aiohttp.ClientTimeout(total=3),
-                        ) as r:
-                            ver = await r.json()
-                            ws_url = ver.get("webSocketDebuggerUrl", "")
-                        if ws_url:
-                            async with http.ws_connect(
-                                ws_url,
-                                timeout=aiohttp.ClientTimeout(total=5),
-                            ) as ws:
-                                await ws.send_json({"id": 1, "method": "Browser.close"})
-                                try:
-                                    await asyncio.wait_for(ws.receive_json(), timeout=3)
-                                except asyncio.TimeoutError:
-                                    pass
-                    await asyncio.sleep(2)  # give Chrome time to flush
-                except Exception:
-                    pass
+            # Browser ALWAYS stays alive — never close via CDP, never session.stop()
+            # Ports are only released by explicit session-close command
+            self.db.add_log(task_id, None, "info",
+                          f"Browser kept alive on port {port}, session {session_id}")
 
-            # Stop browser session (disconnects CDP)
-            if session:
-                try:
-                    await session.stop()
-                except Exception:
-                    pass
-
-            # Handle port: keep occupied if session has active tabs, else free
-            t2 = self.db.get_task(task_id)
-            port_to_check = t2.get("port") if t2 else port
-            should_release = True
-            if port_to_check and session_id:
-                tabs = self.db.get_session_tabs(session_id)
-                has_active = any(ta.get("status") == "active" for ta in tabs)
-                task_status = t2.get("status", "") if t2 else ""
-                # Don't release port on blocked/keep-open — browser must stay alive
-                if task_status == "blocked" or keep_open:
-                    should_release = False
-                    self.db.add_log(task_id, None, "info",
-                                  f"Port {port_to_check} held (blocked/keep-open)")
-                elif has_active:
-                    should_release = False
-                if should_release:
-                    self.pool.release(port_to_check)
-            elif port_to_check and should_release:
-                # No session — always free the port
-                self.pool.release(port_to_check)
+            # Port stays held — only session_close releases it
+            if port and session_id:
+                self.db.add_log(task_id, None, "info",
+                              f"Port {port} held for session {session_id}")
 
             if task_id in self.running:
                 del self.running[task_id]

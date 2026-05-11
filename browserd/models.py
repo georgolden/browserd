@@ -116,8 +116,6 @@ class TaskCreate(BaseModel):
 
     prompt: str = Field(..., min_length=1, max_length=10000)
     browser: BrowserKind = Field(default=BrowserKind.chrome)
-    close_tabs: bool = Field(default=True, description="Close tabs after task done")
-    keep_open: bool = Field(default=False, description="Keep tab open; auto-create session")
     max_steps: int = Field(default=30, ge=1, le=200)
     model: str = Field(default="deepseek-chat")
     session_id: str | None = Field(default=None, description="Bind to existing session")
@@ -147,7 +145,6 @@ class TaskRecord(BaseModel):
     id: str
     prompt: str
     browser: str = "chrome"
-    close_tabs: bool = True
     status: TaskStatus = TaskStatus.queued
     max_steps: int = 30
     model: str = "deepseek-chat"
@@ -178,7 +175,6 @@ class TaskSummary(BaseModel):
     id: str
     prompt: str
     browser: str
-    close_tabs: bool = True
     status: TaskStatus
     max_steps: int
     session_id: str | None = None
@@ -234,8 +230,6 @@ class SocketRequest(BaseModel):
     id: str | None = None
     prompt: str | None = None
     browser: str | None = None
-    keep_open: bool | None = None
-    close_tabs: bool | None = None
     max_steps: int | None = None
     model: str | None = None
     session_id: str | None = None

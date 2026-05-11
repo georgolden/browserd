@@ -79,7 +79,7 @@ class DaemonServer:
         if action == "ping":
             return {
                 "type": "pong",
-                "version": "2.0.0",
+                "version": "2.1.0",
                 "running": len(self.manager.running),
             }
 
@@ -87,8 +87,6 @@ class DaemonServer:
             tid = await self.manager.run(
                 prompt=cmd["prompt"],
                 browser=cmd.get("browser", "chrome"),
-                keep_open=cmd.get("keep_open", False),
-                close_tabs=cmd.get("close_tabs", True),
                 max_steps=cmd.get("max_steps", self.config.default_max_steps),
                 model=cmd.get("model", self.config.llm_model or self.config.default_model),
                 session_id=cmd.get("session_id"),
